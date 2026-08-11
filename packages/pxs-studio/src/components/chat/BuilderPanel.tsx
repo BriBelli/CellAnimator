@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button, Icon } from '../ui';
+import { RenderConfig } from './RenderConfig';
 import type { A2UIBuilderBlock } from '../../store/chat-turns-store';
 import { bandLabel, type ScoreBand, type BuilderScore } from '../../lib/prompt-score';
 
@@ -302,7 +303,8 @@ export function BuilderPanel({ block, values, score, onValueChange, highlight, o
           );
         })}
 
-        <div className="pxc-build-foot">
+        <div className="pxc-build-foot" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--a2ui-space-3)' }}>
+          <RenderConfig />
           <Button variant="primary" size="md" type="button" disabled={!canRender} onClick={() => onRender(assemble(), refs)}>
             <Icon name="sparkles" size={15} /> Render
           </Button>
