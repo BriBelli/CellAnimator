@@ -24,10 +24,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       const restored = await db.update<Thread>('thread', id, { status: 'active' });
       if (!restored) return Response.json({ error: 'project not found' }, { status: 404 });
       try {
-        const { items } = await db.query({ category: 'asset', user_id: userId, filter: { thread_id: id, status: 'deleted' } });
-        for (const a of items as Asset[]) await db.update('asset', a.id, { status: 'active' });
+        const { items: assets } = await db.query({ category: 'asset', user_id: userId, filter: { thread_id: id, status: 'deleted' } });
+        for (const a of assets as Asset[]) await db.update('asset', a.id, { status: 'active' });
+        const { items: inters } = await db.query({ category: 'interaction', user_id: userId, filter: { thread_id: id, status: 'deleted' } });
+        for (const it of inters) await db.update('interaction', it.id, { status: 'active' });
       } catch (err) {
-        console.warn('[threads] asset restore failed (thread still restored):', err);
+        console.warn('[threads] restore failed (thread still restored):', err);
       }
       return Response.json({ thread: { id, updated_at: restored.updated_at } });
     }
@@ -51,12 +53,15 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     const db = await getDb();
     const thread = await db.update<Thread>('thread', id, { status: 'deleted' });
     if (!thread) return Response.json({ error: 'project not found' }, { status: 404 });
-    // Cascade: remove the project's assets too (Brian — deleting a project deletes its media).
+    // Cascade: soft-delete the project's ASSETS *and* INTERACTIONS — otherwise loadThread finds the
+    // still-active interactions on reload and RESURRECTS the "deleted" project (the bug).
     try {
-      const { items } = await db.query({ category: 'asset', user_id: userId, filter: { thread_id: id, status: 'active' } });
-      for (const a of items as Asset[]) await db.update('asset', a.id, { status: 'deleted' });
+      const { items: assets } = await db.query({ category: 'asset', user_id: userId, filter: { thread_id: id, status: 'active' } });
+      for (const a of assets as Asset[]) await db.update('asset', a.id, { status: 'deleted' });
+      const { items: inters } = await db.query({ category: 'interaction', user_id: userId, filter: { thread_id: id, status: 'active' } });
+      for (const it of inters) await db.update('interaction', it.id, { status: 'deleted' });
     } catch (err) {
-      console.warn('[threads] asset cascade failed (thread still deleted):', err);
+      console.warn('[threads] cascade failed (thread still deleted):', err);
     }
     return Response.json({ ok: true, id });
   } catch (err) {

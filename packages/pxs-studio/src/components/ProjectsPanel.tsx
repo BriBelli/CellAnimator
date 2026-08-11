@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Icon, SegmentedControl, SortMenu } from './ui';
 import { toastManager } from './Toast';
 import { SaveTemplateDialog } from './SaveTemplateDialog';
+import { useChatTurnsStore } from '../store/chat-turns-store';
 import { DEV_USER_ID } from '../lib/db/models';
 
 interface ProjectRow {
@@ -245,6 +246,9 @@ export function ProjectsPanel({ activeId, onClose, onOpenProject, onNewProject, 
   const performDelete = async (p: ProjectRow) => {
     setConfirmId(null);
     setProjects((prev) => prev.filter((x) => x.id !== p.id));
+    // Deleting the project you're IN → clear the workspace in-state (turns/frame/threadId + the restore
+    // key) so it doesn't linger across sections or resurrect on refresh.
+    if (activeId === p.id) useChatTurnsStore.getState().reset();
     await fetch(`/api/threads/${p.id}?user_id=${encodeURIComponent(DEV_USER_ID)}`, { method: 'DELETE' }).catch(() => {});
     toastManager.show(`Deleted “${p.title}”`, 'info', 8000, { label: 'Undo', onClick: () => void undoDelete(p) });
   };
