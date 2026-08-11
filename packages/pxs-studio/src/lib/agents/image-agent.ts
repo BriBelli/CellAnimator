@@ -196,7 +196,7 @@ export type ImageAgentEvent =
   /** THE COUPLING: the agent edited a Build part from a natural-language instruction (no render). */
   | { type: 'part_edit'; id: string; value: string }
   | { type: 'gen_start' }
-  | { type: 'image'; url: string; modelLabel: string; index: number }
+  | { type: 'image'; url: string; modelLabel: string; index: number; score?: number }
   | { type: 'gen_error'; message: string }
   /** A gentle non-blocking heads-up (best-effort shortfall) — forwarded from the coordinator. */
   | { type: 'gen_notice'; message: string }
@@ -417,9 +417,12 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     yield { type: 'step', id: 'selecting', status: 'done' };
     yield { type: 'gen_start' };
     let cost = 0;
+    let scoreByModel: Record<string, number> = {};
     for await (const ev of coordinateImage(req, { maxCostUsd: frame.budgetUsd })) {
-      if (ev.type === 'tile') {
-        yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1 };
+      if (ev.type === 'routed') {
+        scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
+      } else if (ev.type === 'tile') {
+        yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1, score: scoreByModel[ev.tile.modelId] };
       } else if (ev.type === 'done') {
         cost = ev.costUsd;
       } else if (ev.type === 'notice') {
@@ -567,9 +570,12 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   yield { type: 'step', id: 'selecting', status: 'done' };
   yield { type: 'gen_start' };
   let cost = 0;
+  let scoreByModel: Record<string, number> = {};
   for await (const ev of coordinateImage(req, { maxCostUsd: frame.budgetUsd })) {
-    if (ev.type === 'tile') {
-      yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1 };
+    if (ev.type === 'routed') {
+      scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
+    } else if (ev.type === 'tile') {
+      yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1, score: scoreByModel[ev.tile.modelId] };
     } else if (ev.type === 'done') {
       cost = ev.costUsd;
     } else if (ev.type === 'notice') {

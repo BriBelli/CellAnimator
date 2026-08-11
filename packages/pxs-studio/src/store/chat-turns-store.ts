@@ -138,6 +138,8 @@ export interface GalleryImage {
   url: string;
   modelLabel: string;
   index: number;
+  /** The fan-out fit score the model was picked by (higher = better fit for this request). */
+  score?: number;
 }
 
 export type ChatTurnStatus = 'thinking' | 'streaming' | 'done' | 'error';
@@ -411,7 +413,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                       ...t,
                       images: [
                         ...t.images,
-                        { url: evt.url, modelLabel: evt.modelLabel || '', index: t.images.length },
+                        { url: evt.url, modelLabel: evt.modelLabel || '', index: t.images.length, score: evt.score },
                       ],
                     }
                   : t

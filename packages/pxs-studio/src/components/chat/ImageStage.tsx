@@ -23,6 +23,8 @@ export interface StageImage {
   modelLabel: string;
   index: number;
   turnId: string;
+  /** Fan-out fit score the model was picked by — used to RANK the model columns (best fit first). */
+  score?: number;
 }
 
 interface ImageStageProps {
@@ -221,6 +223,9 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
     g.items.push({ img, gi });
   });
   const multiModel = groups.length > 1;
+  // Best-fit FIRST — the agent's ranking becomes the column order, made explicit with a #rank badge.
+  // (Tiles keep their global index for the viewer, so reordering columns is purely visual.)
+  groups.sort((a, b) => (b.items[0]?.img.score ?? 0) - (a.items[0]?.img.score ?? 0));
 
   const renderTile = (img: StageImage, gi: number, li: number) => (
     <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${bentoClass(li)}`} data-wash={li % 2 === 0 ? 'a' : 'b'} tabIndex={0}>
@@ -268,9 +273,10 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
             )}
             {multiModel ? (
               <div className="pxc-stage-groups">
-                {groups.map((g) => (
+                {groups.map((g, ri) => (
                   <div key={g.label} className="pxc-stage-group">
                     <div className="pxc-stage-group-head">
+                      {g.items[0]?.img.score != null && <span className="pxc-stage-score" title="Model agent's fit rank for this prompt">#{ri + 1}</span>}
                       <span className="pxc-stage-model">{g.label}</span>
                       <span className="pxc-stage-count">{g.items.length}</span>
                     </div>
