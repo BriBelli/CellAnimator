@@ -32,8 +32,13 @@ export interface RoutingRequest {
   /** Capabilities the request REQUIRES (Gate-1 hard filter). */
   needs: Capability[];
   aspectRatio?: string;
-  /** Desired number of images total (K). */
+  /** Desired number of images total (K) — the single/spread path splits this across models. */
   count: number;
+  /** FAN-OUT breadth: distinct models to render across in ONE turn (decision-closure — you see N
+   *  models' takes side by side). >1 → the coordinator fans across the top-N. Default 1 (single). */
+  fanModels?: number;
+  /** Images PER model in a fan-out (the Artlist "Number of Images"). Default 1. Total = fanModels×perModel. */
+  perModel?: number;
   /** Input images (https or data URLs) to edit / compose from — forwarded to the adapter. */
   references?: string[];
   /** True when the request edits/composes input images. */
@@ -151,6 +156,32 @@ export function deterministicRoute(
   return { primary, fanout: [primary], dropped, estCostUsd: estimateCost([primary]) };
 }
 
+/**
+ * Deterministic MULTI-MODEL fan-out (Slice 1 engine): render across the top-`fanModels` survivors, each
+ * producing `perModel` images — the N-models × M-images grid that gives decision closure. Ranked by
+ * tier then prompt-adherence. This is the SAFE floor; Slice 2 replaces "top-N by tier" with the Model
+ * agent's live, scored pick of WHICH models best fit THIS prompt (never a static rating — that was
+ * photolif's fatal flaw). Never dead-ends: fewer survivors than asked just fans across what exists.
+ */
+export function deterministicFanout(
+  req: RoutingRequest,
+  survivors: ImageModel[],
+  dropped: DroppedModel[]
+): RoutingDecision | null {
+  if (survivors.length === 0) return null;
+  const want = Math.max(1, req.fanModels ?? 1);
+  const per = Math.max(1, req.perModel ?? 1);
+  const chosen = [...survivors]
+    .sort((a, b) => b.tier - a.tier || b.strengths.prompt_adherence - a.strengths.prompt_adherence)
+    .slice(0, want);
+  const fanout: RoutedModel[] = chosen.map((m) => ({
+    modelId: m.id,
+    n: per,
+    rationale: `Fan-out pick — ${m.label} (tier ${m.tier}).`,
+  }));
+  return { primary: fanout[0], fanout, dropped, estCostUsd: estimateCost(fanout) };
+}
+
 /* ── Gate 2 — LLM rank over survivors ──────────────────────────────────────── */
 
 const RANK_SYSTEM = `You are the routing oracle for an image-generation coordinator.
@@ -181,6 +212,9 @@ export async function route(
 ): Promise<RoutingDecision | null> {
   const { survivors, dropped } = gate1Filter(req, opts.hasKey, opts.catalog);
   if (survivors.length === 0) return null;
+  // Explicit fan-out (Slice 1): fan across the top-N survivors deterministically. Slice 2 makes WHICH
+  // N an intelligent, scored choice — this is the engine floor that proves N-model parallel render.
+  if ((req.fanModels ?? 1) > 1) return deterministicFanout(req, survivors, dropped);
   if (survivors.length === 1) return deterministicRoute(req, survivors, dropped);
 
   const client = opts.client ?? new Anthropic();

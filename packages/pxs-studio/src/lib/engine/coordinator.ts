@@ -76,37 +76,59 @@ export async function* coordinateImage(
   const tiles: GalleryTile[] = [];
   let costUsd = 0;
 
-  // Dispatch routed models sequentially (each model streams its own tiles in parallel).
-  for (const routed of decision.fanout) {
+  // Dispatch ALL routed models in PARALLEL — the fan-out is the whole point (you see every model's take
+  // at once, the "multi-grid loading" surface), so a model must never wait behind another. Each model's
+  // adapter still streams its own tiles; we MERGE those streams into one event queue, interleaving tiles
+  // as they land regardless of which model finished first. The up-front worst-case guard above already
+  // blocks an over-budget fan from starting, so cost here just accumulates for the final `done`.
+  const queue: CoordEvent[] = [];
+  let wake: (() => void) | null = null;
+  const push = (ev: CoordEvent) => {
+    queue.push(ev);
+    if (wake) { wake(); wake = null; }
+  };
+
+  const runModel = async (routed: RoutingDecision['fanout'][number]): Promise<void> => {
     const model = getModel(routed.modelId);
-    if (!model) continue;
+    if (!model) return;
     const executor = getExecutor(model.provider);
     if (!executor || !executor.isConfigured()) {
-      yield { type: 'model_error', modelId: routed.modelId, reason: 'no_key' };
-      continue;
+      push({ type: 'model_error', modelId: routed.modelId, reason: 'no_key' });
+      return;
     }
-
-    yield { type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n };
-
+    push({ type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n });
     try {
       for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: req.references })) {
         if (ev.type === 'tile') {
           const tile: GalleryTile = { modelId: model.id, modelLabel: model.label, image: ev.image };
           tiles.push(tile);
-          yield { type: 'tile', tile, totalSoFar: tiles.length };
+          push({ type: 'tile', tile, totalSoFar: tiles.length });
         } else if (ev.type === 'done') {
           costUsd = Number((costUsd + ev.costUsd).toFixed(3));
-          if (costUsd > maxCost) {
-            yield { type: 'done', tiles, costUsd };
-            return;
-          }
         } else if (ev.type === 'error') {
-          yield { type: 'model_error', modelId: model.id, reason: ev.reason };
+          push({ type: 'model_error', modelId: model.id, reason: ev.reason });
         }
       }
     } catch (err) {
-      yield { type: 'model_error', modelId: model.id, reason: err instanceof Error ? err.message : 'adapter crashed' };
+      push({ type: 'model_error', modelId: model.id, reason: err instanceof Error ? err.message : 'adapter crashed' });
     }
+  };
+
+  let running = decision.fanout.length;
+  for (const routed of decision.fanout) {
+    void runModel(routed).finally(() => {
+      running -= 1;
+      if (wake) { wake(); wake = null; }
+    });
+  }
+
+  // Drain the merged queue, yielding events as they arrive until every model has settled.
+  while (running > 0 || queue.length > 0) {
+    if (queue.length === 0) {
+      await new Promise<void>((resolve) => { wake = resolve; });
+      continue;
+    }
+    yield queue.shift()!;
   }
 
   if (tiles.length === 0) {
