@@ -48,6 +48,18 @@ const CSS = `
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--a2ui-text-tertiary);
 }
 
+/* FAN-OUT groups — one column per model (decision closure: every model's take side by side). */
+.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--a2ui-space-5); align-items: start; }
+.pxc-stage-group { display: flex; flex-direction: column; gap: var(--a2ui-space-3); min-width: 0; }
+.pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Per-model FIT SCORE — the badge that speeds the choosing once the field is trusted. */
+.pxc-stage-score { flex-shrink: 0; display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
+  border-radius: var(--a2ui-radius-full); font-family: var(--a2ui-font-mono); font-size: 10px; font-variant-numeric: tabular-nums;
+  color: var(--pxs-accent-text); background: var(--a2ui-accent-subtle); border: 1px solid var(--a2ui-border-subtle); }
+.pxc-stage-count { margin-left: auto; flex-shrink: 0; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); font-variant-numeric: tabular-nums; }
+
 .pxc-stage-scroll { flex: 1; overflow-y: auto; padding: var(--a2ui-space-5) var(--a2ui-space-6) var(--a2ui-space-8); }
 /* BENTO — a repeating 4-tile rhythm (hero 16/9 span-2 · square · square · wide 16/10 span-2) over a
    2-col grid, so results pack like the mock instead of a uniform square grid. "dense" backfills the
@@ -196,6 +208,51 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
     }
   };
 
+  // Group the fan-out results by MODEL — one column per model (decision closure: every model's take
+  // side by side). Preserve each tile's GLOBAL index so the full-screen viewer still walks the whole set.
+  const groups: { label: string; items: { img: StageImage; gi: number }[] }[] = [];
+  images.forEach((img, gi) => {
+    const label = img.modelLabel || 'Model';
+    let g = groups.find((x) => x.label === label);
+    if (!g) {
+      g = { label, items: [] };
+      groups.push(g);
+    }
+    g.items.push({ img, gi });
+  });
+  const multiModel = groups.length > 1;
+
+  const renderTile = (img: StageImage, gi: number, li: number) => (
+    <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${bentoClass(li)}`} data-wash={li % 2 === 0 ? 'a' : 'b'} tabIndex={0}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={img.url} alt={img.modelLabel || 'generated image'} />
+      <div className="pxc-stage-overlay">
+        {onSaveAsset && (
+          <button
+            type="button"
+            className="pxc-stage-icon"
+            data-on={saved.has(keyOf(img)) ? 'true' : 'false'}
+            onClick={() => handleSave(img)}
+            disabled={savingKey === keyOf(img) || saved.has(keyOf(img))}
+            title={saved.has(keyOf(img)) ? 'Saved to Assets' : 'Save to Assets'}
+          >
+            <Icon name={saved.has(keyOf(img)) ? 'check' : 'save'} size={15} />
+          </button>
+        )}
+        <button type="button" className="pxc-stage-icon" onClick={() => setViewerIndex(gi)} title="View">
+          <Icon name="eye" size={15} />
+        </button>
+        <button type="button" className="pxc-stage-icon" onClick={() => handleCopy(img)} title="Copy image">
+          <Icon name="copy" size={15} />
+        </button>
+        <a className="pxc-stage-icon" href={img.url} download={`pixcel-${img.index + 1}.png`} title="Download">
+          <Icon name="download" size={15} />
+        </a>
+      </div>
+      {img.modelLabel && <span className="pxc-stage-badge">{img.modelLabel}</span>}
+    </div>
+  );
+
   return (
     <div className="pxc-stage relative flex-1 flex flex-col min-w-0 min-h-0">
       <style>{CSS}</style>
@@ -204,39 +261,30 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
         <>
           <div className="pxc-stage-head"><span className="pxc-stage-label">Results</span></div>
           <div className="pxc-stage-scroll">
-          <div className="pxc-stage-grid">
-            {generating && <div className="pxc-stage-pending pxc-bento-sq">Generating…</div>}
-            {images.map((img, i) => (
-              <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${bentoClass(i)}`} data-wash={i % 2 === 0 ? 'a' : 'b'} tabIndex={0}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img.url} alt={img.modelLabel || 'generated image'} />
-                <div className="pxc-stage-overlay">
-                  {onSaveAsset && (
-                    <button
-                      type="button"
-                      className="pxc-stage-icon"
-                      data-on={saved.has(keyOf(img)) ? 'true' : 'false'}
-                      onClick={() => handleSave(img)}
-                      disabled={savingKey === keyOf(img) || saved.has(keyOf(img))}
-                      title={saved.has(keyOf(img)) ? 'Saved to Assets' : 'Save to Assets'}
-                    >
-                      <Icon name={saved.has(keyOf(img)) ? 'check' : 'save'} size={15} />
-                    </button>
-                  )}
-                  <button type="button" className="pxc-stage-icon" onClick={() => setViewerIndex(i)} title="View">
-                    <Icon name="eye" size={15} />
-                  </button>
-                  <button type="button" className="pxc-stage-icon" onClick={() => handleCopy(img)} title="Copy image">
-                    <Icon name="copy" size={15} />
-                  </button>
-                  <a className="pxc-stage-icon" href={img.url} download={`pixcel-${img.index + 1}.png`} title="Download">
-                    <Icon name="download" size={15} />
-                  </a>
-                </div>
-                {img.modelLabel && <span className="pxc-stage-badge">{img.modelLabel}</span>}
+            {generating && (
+              <div className="pxc-stage-grid" style={{ marginBottom: 'var(--a2ui-space-4)' }}>
+                <div className="pxc-stage-pending pxc-bento-sq">Generating…</div>
               </div>
-            ))}
-          </div>
+            )}
+            {multiModel ? (
+              <div className="pxc-stage-groups">
+                {groups.map((g) => (
+                  <div key={g.label} className="pxc-stage-group">
+                    <div className="pxc-stage-group-head">
+                      <span className="pxc-stage-model">{g.label}</span>
+                      <span className="pxc-stage-count">{g.items.length}</span>
+                    </div>
+                    <div className="pxc-stage-grid">
+                      {g.items.map(({ img, gi }, li) => renderTile(img, gi, li))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="pxc-stage-grid">
+                {images.map((img, i) => renderTile(img, i, i))}
+              </div>
+            )}
           </div>
         </>
       ) : (
