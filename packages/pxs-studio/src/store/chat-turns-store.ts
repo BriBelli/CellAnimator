@@ -189,6 +189,8 @@ export interface FanConfig {
   fanModels: number;
   /** Images per model. */
   perModel: number;
+  /** Render aspect (e.g. "16:9") — also the reference aspect-fit target. Undefined = let the model decide. */
+  aspect?: string;
 }
 
 interface ChatTurnsState {
@@ -304,6 +306,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                 references, // attached reference images (data URLs) for the Image agent
                 reference_asset_ids: referenceAssetIds, // aligned with references — existing saved-asset ids (lineage)
                 builder, // present → COLLABORATION: the agent can edit the parts, not just render
+                fan: st.fanConfig, // the picker/config: which models, how many, images each, aspect
               }
             : {
                 prompt,

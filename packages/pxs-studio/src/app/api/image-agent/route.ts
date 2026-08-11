@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { runImageAgent } from '../../../lib/agents/image-agent';
+import { runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { refreshRegistryIfDue } from '../../../lib/agents/model-refresh-runner';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
@@ -68,6 +68,7 @@ export async function POST(req: Request) {
     user_id?: string;
     section?: string;
     builder?: { parts?: { id?: string; label?: string; value?: string }[] };
+    fan?: FanConfigInput;
   };
   try {
     body = await req.json();
@@ -217,7 +218,7 @@ export async function POST(req: Request) {
           count: 2,
         };
 
-        for await (const ev of runImageAgent(frame, { userMessage: prompt, history, references, builder })) {
+        for await (const ev of runImageAgent(frame, { userMessage: prompt, history, references, builder, fan: body.fan })) {
           if (ev.type === 'agent_usage') {
             agentInTok += ev.inputTokens;
             agentOutTok += ev.outputTokens;

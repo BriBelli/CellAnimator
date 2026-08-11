@@ -274,6 +274,18 @@ export interface ImageAgentTurn {
   /** The CURRENT Build state (parts + their live values). Present → COLLABORATION mode: the agent
    *  decides edit / render / answer instead of always rendering (the coupling). */
   builder?: { parts: { id: string; label: string; value: string }[] };
+  /** The fan-out config from the picker/composer (which models, how many, images each, aspect). Absent
+   *  → the auto default (top-N by fit). Overrides FANOUT_DEFAULT_* + the aspect for THIS render. */
+  fan?: FanConfigInput;
+}
+
+/** The fan-out controls the picker sends (all optional — absent fields fall back to the auto default). */
+export interface FanConfigInput {
+  mode?: 'auto' | 'manual';
+  models?: string[];
+  fanModels?: number;
+  perModel?: number;
+  aspect?: string;
 }
 
 /**
@@ -287,6 +299,14 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   yield { type: 'agent_start' };
 
   const instruction = typeof turn.userMessage === 'string' ? turn.userMessage.trim() : '';
+
+  // Fan-out controls from the picker (else the auto default). Manual mode → `models` drives the fan;
+  // auto → top-N by fit. `aspect` sets the render AND the reference aspect-fit target for this render.
+  const fanCfg = turn.fan;
+  const manualModels = fanCfg?.mode === 'manual' && fanCfg.models && fanCfg.models.length > 0 ? fanCfg.models : undefined;
+  const fanModelsN = manualModels ? undefined : Math.max(1, fanCfg?.fanModels ?? FANOUT_DEFAULT_MODELS);
+  const perModelN = Math.max(1, fanCfg?.perModel ?? FANOUT_DEFAULT_PER_MODEL);
+  const fanAspect = fanCfg?.aspect;
   const refCount = turn.references?.length ?? 0;
   // A workspace follow-up is an instruction OR attached references (either means "iterate", not
   // "first anchor") — so skip re-emitting the reference recommendation.
@@ -408,8 +428,10 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
       intent: assembled || frame.goal,
       needs: refCount > 0 ? ['multi_reference'] : [],
       count: frame.count,
-      fanModels: FANOUT_DEFAULT_MODELS,
-      perModel: FANOUT_DEFAULT_PER_MODEL,
+      fanModels: fanModelsN,
+      perModel: perModelN,
+      models: manualModels,
+      aspectRatio: fanAspect,
       references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
       budgetUsd: frame.budgetUsd,
     };
@@ -514,10 +536,11 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   const req: RoutingRequest = {
     intent: typeof plan.prompt === 'string' && plan.prompt.trim() ? plan.prompt.trim() : frame.goal,
     needs,
-    aspectRatio: typeof plan.aspectRatio === 'string' ? plan.aspectRatio : undefined,
+    aspectRatio: fanAspect ?? (typeof plan.aspectRatio === 'string' ? plan.aspectRatio : undefined),
     count: typeof plan.count === 'number' && plan.count > 0 ? Math.min(8, Math.floor(plan.count)) : frame.count,
-    fanModels: FANOUT_DEFAULT_MODELS,
-    perModel: FANOUT_DEFAULT_PER_MODEL,
+    fanModels: fanModelsN,
+    perModel: perModelN,
+    models: manualModels,
     references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
     budgetUsd: frame.budgetUsd,
   };
