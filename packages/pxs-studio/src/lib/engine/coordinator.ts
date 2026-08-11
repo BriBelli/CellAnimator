@@ -137,7 +137,7 @@ export async function* coordinateImage(
   }
   // Graceful specialist: if we delivered fewer than the ask (a model capped its batch, one failed,
   // or the cost ceiling trimmed the run), surface ONE gentle notice — never an error, the run stands.
-  const want = Math.max(1, req.count);
+  const want = decision.fanout.reduce((s, r) => s + r.n, 0) || Math.max(1, req.count);
   if (tiles.length < want) {
     yield { type: 'notice', message: `Rendered ${tiles.length} of ${want} — best effort (a model capped this batch or came up short).` };
   }

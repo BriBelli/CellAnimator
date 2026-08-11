@@ -18,6 +18,13 @@ import { describeModelCapabilitiesOrDefault, type ModelCapabilityFacts } from '.
 import { imageAgentSkills } from './skills';
 import { assertFrameBudget, type EpistemicFrame } from './epistemic-frame';
 
+/** THE FAN-OUT DEFAULT (Brian): every render fans across the top-N models — auto-picked by fit + provider
+ *  diversity — one image each. Fan-out is the DEFAULT (single is the N=1 case); this is decision closure
+ *  (see GPT vs Gemini vs Flux at once, commit without regret). Tunable; Slice 4's per-turn config
+ *  overrides per render, and the frame's $-budget still hard-caps the worst case. */
+const FANOUT_DEFAULT_MODELS = 3;
+const FANOUT_DEFAULT_PER_MODEL = 1;
+
 const MODEL = 'claude-opus-4-8';
 
 /** The capability tags Gate 1 understands (filter the agent's `needs` to these). */
@@ -401,6 +408,8 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
       intent: assembled || frame.goal,
       needs: refCount > 0 ? ['multi_reference'] : [],
       count: frame.count,
+      fanModels: FANOUT_DEFAULT_MODELS,
+      perModel: FANOUT_DEFAULT_PER_MODEL,
       references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
       budgetUsd: frame.budgetUsd,
     };
@@ -504,6 +513,8 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     needs,
     aspectRatio: typeof plan.aspectRatio === 'string' ? plan.aspectRatio : undefined,
     count: typeof plan.count === 'number' && plan.count > 0 ? Math.min(8, Math.floor(plan.count)) : frame.count,
+    fanModels: FANOUT_DEFAULT_MODELS,
+    perModel: FANOUT_DEFAULT_PER_MODEL,
     references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
     budgetUsd: frame.budgetUsd,
   };

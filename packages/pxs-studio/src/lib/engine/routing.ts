@@ -52,6 +52,9 @@ export interface RoutedModel {
   modelId: string;
   n: number;
   rationale: string;
+  /** The fit score the fan-out ranked this model by (higher = better fit for THIS request). Surfaced
+   *  per-result so the UI can show a per-model score (Slice 3). */
+  score?: number;
 }
 
 /** A Gate-1 drop, kept for transparency. */
@@ -157,11 +160,51 @@ export function deterministicRoute(
 }
 
 /**
- * Deterministic MULTI-MODEL fan-out (Slice 1 engine): render across the top-`fanModels` survivors, each
- * producing `perModel` images — the N-models × M-images grid that gives decision closure. Ranked by
- * tier then prompt-adherence. This is the SAFE floor; Slice 2 replaces "top-N by tier" with the Model
- * agent's live, scored pick of WHICH models best fit THIS prompt (never a static rating — that was
- * photolif's fatal flaw). Never dead-ends: fewer survivors than asked just fans across what exists.
+ * Score a model's FIT for THIS request — read live from the registry (self-maintaining), never a static
+ * rating (photolif's fatal flaw). Grounded in the STRUCTURED request signals (editing / references /
+ * needs) matched to the model's strengths + tier — not prompt NLP (that's the LLM ranker's job). This
+ * is what makes the fan-out's auto pick "the top-N for what you actually asked," and it stays current
+ * as the Model agent's refresh updates the registry.
+ */
+export function scoreModelForRequest(m: ImageModel, req: RoutingRequest): number {
+  let s = m.tier * 2 + m.strengths.prompt_adherence;
+  if (req.editing) s += m.strengths.editing;
+  if (req.references && req.references.length > 0) {
+    s += m.strengths.multimodal + (m.capabilities.includes('multi_reference') ? 2 : 0) + m.strengths.consistency;
+  }
+  for (const need of req.needs) if (m.capabilities.includes(need)) s += 1;
+  return s;
+}
+
+/**
+ * Pick the top-`want` models to fan across — scored by fit, then spread for PROVIDER DIVERSITY. Decision
+ * closure needs DIFFERENT takes (GPT vs Gemini vs Flux), not three variants of one family — so the first
+ * pass takes the best model per provider, then fills any remaining slots with the next-best overall.
+ */
+export function pickFanout(survivors: ImageModel[], req: RoutingRequest, want: number): ImageModel[] {
+  const scored = survivors
+    .map((m) => ({ m, s: scoreModelForRequest(m, req) }))
+    .sort((a, b) => b.s - a.s);
+  const chosen: ImageModel[] = [];
+  const usedProviders = new Set<string>();
+  for (const { m } of scored) {
+    if (chosen.length >= want) break;
+    if (usedProviders.has(m.provider)) continue;
+    chosen.push(m);
+    usedProviders.add(m.provider);
+  }
+  for (const { m } of scored) {
+    if (chosen.length >= want) break;
+    if (!chosen.includes(m)) chosen.push(m);
+  }
+  return chosen;
+}
+
+/**
+ * MULTI-MODEL fan-out: render across the top-`fanModels` models (by live fit score + provider
+ * diversity), each producing `perModel` images — the N×M grid that gives decision closure. Autonomous
+ * and self-maintaining (scores the current registry), never a static rating. Never dead-ends: fewer
+ * survivors than asked just fans across what exists.
  */
 export function deterministicFanout(
   req: RoutingRequest,
@@ -171,13 +214,11 @@ export function deterministicFanout(
   if (survivors.length === 0) return null;
   const want = Math.max(1, req.fanModels ?? 1);
   const per = Math.max(1, req.perModel ?? 1);
-  const chosen = [...survivors]
-    .sort((a, b) => b.tier - a.tier || b.strengths.prompt_adherence - a.strengths.prompt_adherence)
-    .slice(0, want);
-  const fanout: RoutedModel[] = chosen.map((m) => ({
+  const fanout: RoutedModel[] = pickFanout(survivors, req, want).map((m) => ({
     modelId: m.id,
     n: per,
-    rationale: `Fan-out pick — ${m.label} (tier ${m.tier}).`,
+    rationale: `Fan-out pick — ${m.label} (tier ${m.tier}, best fit for this request).`,
+    score: scoreModelForRequest(m, req),
   }));
   return { primary: fanout[0], fanout, dropped, estCostUsd: estimateCost(fanout) };
 }
