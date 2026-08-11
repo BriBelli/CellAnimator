@@ -14,6 +14,7 @@ import { getModel } from './model-registry';
 import { getExecutor } from './executor';
 import { selectModels } from '../agents/model-agent';
 import { type RoutingRequest, type RoutingDecision } from './routing';
+import { fitReferencesToAspect } from './reference-fit';
 import type { GenImage } from './executor';
 
 /** A tile in the coordinated gallery — one image + which model made it. */
@@ -76,6 +77,11 @@ export async function* coordinateImage(
   const tiles: GalleryTile[] = [];
   let costUsd = 0;
 
+  // ASPECT-FIT the references ONCE (the GenAI trick): letterbox each reference onto the render's aspect
+  // so a portrait ref conditions a 16:9 render instead of being warped/cloned. Shared by every fan-out
+  // model. No aspect / no refs → unchanged. Failure returns the originals (never blocks a render).
+  const fittedRefs = await fitReferencesToAspect(req.references, req.aspectRatio);
+
   // Dispatch ALL routed models in PARALLEL — the fan-out is the whole point (you see every model's take
   // at once, the "multi-grid loading" surface), so a model must never wait behind another. Each model's
   // adapter still streams its own tiles; we MERGE those streams into one event queue, interleaving tiles
@@ -98,7 +104,7 @@ export async function* coordinateImage(
     }
     push({ type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n });
     try {
-      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: req.references })) {
+      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: fittedRefs })) {
         if (ev.type === 'tile') {
           const tile: GalleryTile = { modelId: model.id, modelLabel: model.label, image: ev.image };
           tiles.push(tile);

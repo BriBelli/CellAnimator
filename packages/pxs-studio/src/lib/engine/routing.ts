@@ -39,6 +39,9 @@ export interface RoutingRequest {
   fanModels?: number;
   /** Images PER model in a fan-out (the Artlist "Number of Images"). Default 1. Total = fanModels×perModel. */
   perModel?: number;
+  /** MANUAL model pick (the picker UI): fan across EXACTLY these model ids (those that survive Gate 1).
+   *  Overrides the auto top-N. Empty/absent → auto. Never dead-ends — if none survive, falls back to auto. */
+  models?: string[];
   /** Input images (https or data URLs) to edit / compose from — forwarded to the adapter. */
   references?: string[];
   /** True when the request edits/composes input images. */
@@ -253,8 +256,22 @@ export async function route(
 ): Promise<RoutingDecision | null> {
   const { survivors, dropped } = gate1Filter(req, opts.hasKey, opts.catalog);
   if (survivors.length === 0) return null;
-  // Explicit fan-out (Slice 1): fan across the top-N survivors deterministically. Slice 2 makes WHICH
-  // N an intelligent, scored choice — this is the engine floor that proves N-model parallel render.
+  // MANUAL pick (the picker UI) — fan across EXACTLY the chosen models that survive Gate 1. Never a
+  // dead-end: if none of the picks survive, fall through to the auto pick below.
+  if (req.models && req.models.length > 0) {
+    const chosen = survivors.filter((m) => req.models!.includes(m.id));
+    if (chosen.length > 0) {
+      const per = Math.max(1, req.perModel ?? 1);
+      const fanout: RoutedModel[] = chosen.map((m) => ({
+        modelId: m.id,
+        n: per,
+        rationale: `Manual pick — ${m.label}.`,
+        score: scoreModelForRequest(m, req),
+      }));
+      return { primary: fanout[0], fanout, dropped, estCostUsd: estimateCost(fanout) };
+    }
+  }
+  // Explicit fan-out (auto): fan across the top-N survivors by live fit + provider diversity.
   if ((req.fanModels ?? 1) > 1) return deterministicFanout(req, survivors, dropped);
   if (survivors.length === 1) return deterministicRoute(req, survivors, dropped);
 

@@ -180,6 +180,17 @@ export interface ChatTurn {
   interactionId?: string;
 }
 
+/** How the next render fans out — edited by the picker/composer, read by the render request. */
+export interface FanConfig {
+  mode: 'auto' | 'manual';
+  /** Manual mode: the model ids to fan across. */
+  models: string[];
+  /** Auto mode: how many models the agent fans across (top-N). */
+  fanModels: number;
+  /** Images per model. */
+  perModel: number;
+}
+
 interface ChatTurnsState {
   turns: ChatTurn[];
   /** The active thread id — captured from the `done` event, persisted to localStorage. */
@@ -201,6 +212,10 @@ interface ChatTurnsState {
    *  NEVER read as permission — the agent always acts and sets it, never "checks what the user clicked".
    *  It is NOT durable project data: flipping the lens can't touch the persisted turns/frame/assets. */
   viewMode: 'chat' | 'ide';
+  /** How the NEXT render fans out (the picker + composer config edit this). 'auto' = the Model agent
+   *  picks the top-N; 'manual' = fan across exactly `models`. `perModel` = images each. Shared so the
+   *  picker, the composer, and the Render button all read/write one source. */
+  fanConfig: FanConfig;
   /** SHARED builder part values — the single source for the Build panel AND the center prompt
    *  (two-way binding), AND what the Agent writes to via `part_edit` (the COUPLING). Keyed by part id. */
   partValues: Record<string, string>;
@@ -234,6 +249,8 @@ interface ChatTurnsState {
   setActiveMedium: (medium: 'chat' | 'image' | 'video') => void;
   /** Set the shared Chat/IDE lens (see `viewMode`). Called by the pill AND by the agent transfer. */
   setViewMode: (mode: 'chat' | 'ide') => void;
+  /** Update the fan-out config (the picker/composer). Partial merge. */
+  setFanConfig: (patch: Partial<FanConfig>) => void;
   /** Name the active project (set when one is opened, so the shell can display it). */
   setThreadTitle: (title: string | null) => void;
   /** Enter a section from the primary NAV — the phone-menu hand-off. Selects the medium and DROPS
@@ -489,6 +506,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     activeMedium: 'chat',
     activeFrame: null,
     viewMode: 'chat',
+    fanConfig: { mode: 'auto', models: [], fanModels: 3, perModel: 1 },
     partValues: {},
     partSeedTurn: null,
     lastEdit: null,
@@ -640,6 +658,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     },
     setActiveMedium: (medium) => set({ activeMedium: medium }),
     setViewMode: (mode) => set({ viewMode: mode }),
+    setFanConfig: (patch) => set((s) => ({ fanConfig: { ...s.fanConfig, ...patch } })),
     setThreadTitle: (title) => set({ threadTitle: title }),
     // Keep turns + threadId (the project); only the in-flight frame is dropped.
     enterSection: (medium) => set({ activeMedium: medium, activeFrame: null }),
