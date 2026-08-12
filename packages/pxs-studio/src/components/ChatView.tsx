@@ -27,6 +27,7 @@ import { Composer, Icon, SegmentedControl, type ComposerAttachment } from './ui'
 import { MessageTurn } from './chat/MessageTurn';
 import { ImageStage, type StageImage } from './chat/ImageStage';
 import { VideoWorkspace } from './chat/VideoWorkspace';
+import { RenderConfig } from './chat/RenderConfig';
 import { toastManager } from './Toast';
 import { PromptGuidePanel } from './chat/PromptGuidePanel';
 import { BuilderPanel } from './chat/BuilderPanel';
@@ -372,6 +373,13 @@ export default function ChatView({ initialPrompt }: Props) {
               user brings (prompt + references) and transfers it to the specialist — it never gatekeeps.
               References persist on the turn (chat-turn route) so they ride along + rehydrate on reload. */}
           <Composer value={draft} onChange={setDraft} onSubmit={submit} attachEnabled />
+          {/* The fan-out picker — models · images · aspect. On the composer bar (where you render from),
+              so it's always in reach. Image/video sections only (chat home doesn't generate). */}
+          {activeMedium !== 'chat' && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <RenderConfig />
+            </div>
+          )}
         </div>
       </div>
     </div>
