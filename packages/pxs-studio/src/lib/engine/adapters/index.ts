@@ -8,4 +8,5 @@ import './gemini';
 import './openai';
 import './replicate';
 import './recraft';
-// Next: import './ideogram'; (v3 endpoint pending doc-lookup confirmation)
+import './ideogram';
+import './xai';
