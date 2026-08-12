@@ -75,7 +75,7 @@
   /* Floating-rail geometry — one source of truth so the content behind can pad itself clear. */
   --pxs-rail-w:     60px;
   --pxs-rail-inset: 16px;
-  --pxs-rail-gap:   8px;   /* ← the gap between the rail and content. THIS is the gutter dial. */
+  --pxs-rail-gap:   16px;  /* ← the gap between the rail and content. THIS is the gutter dial. */
   /* Content clears the rail: inset + rail width + a small gap (was inset*2 = a doubled 92px gutter). */
   --pxs-rail-space: calc(var(--pxs-rail-inset) + var(--pxs-rail-w) + var(--pxs-rail-gap));
 

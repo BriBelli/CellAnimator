@@ -155,6 +155,7 @@ export default function Home() {
   const splashStyle = useSettings((s) => s.splashStyle);
   const theme = useSettings((s) => s.theme);
   const activeMedium = useChatTurnsStore((s) => s.activeMedium);
+  const viewMode = useChatTurnsStore((s) => s.viewMode);
   const setActiveMedium = useChatTurnsStore((s) => s.setActiveMedium);
   const loadThread = useChatTurnsStore((s) => s.loadThread);
   const resetChat = useChatTurnsStore((s) => s.reset);
@@ -360,7 +361,7 @@ export default function Home() {
             >
               {/* PERSISTENT PROJECT IDENTITY — quiet, always-there, so you always know which project
                   you're in (and can jump to the list). A project you can't name is one you can't trust. */}
-              {stage === 'chat' && !assetsOpen && projectName && (
+              {stage === 'chat' && !assetsOpen && projectName && !(activeMedium !== 'chat' && viewMode === 'ide') && (
                 <button
                   type="button"
                   className="pxs-project-chip"
@@ -369,7 +370,9 @@ export default function Home() {
                   style={{
                     position: 'absolute',
                     top: 'var(--a2ui-space-4)',
-                    left: 'var(--a2ui-space-4)',
+                    // Clear the FLOATING rail — the content well's padding box starts at the border (under
+                    // the rail), so an absolute child must offset by the rail space or it tucks under it.
+                    left: 'calc(var(--pxs-rail-space) + var(--a2ui-space-2))',
                     zIndex: 20,
                     display: 'inline-flex',
                     alignItems: 'center',
