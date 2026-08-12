@@ -283,7 +283,10 @@ export default function Home() {
 
   // Layer styling for the content well. Steady = fill the well; transitioning = staggered fade.
   const layerStyle = (kind: 'incoming' | 'outgoing'): CSSProperties => {
-    const fill: CSSProperties = { position: 'absolute', inset: 0 };
+    // Clear the FLOATING rail: this layer is absolute, so `inset:0` (left:0) would sit at the padding-box
+    // border — UNDER the rail — ignoring the well's paddingLeft. Offset `left` by the rail space instead,
+    // so the full-bleed canvas never tucks under the rail. (Only spacing; the canvas UI is untouched.)
+    const fill: CSSProperties = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 'var(--pxs-rail-space)' };
     if (!transitioning) return fill;
     if (kind === 'outgoing') {
       return {

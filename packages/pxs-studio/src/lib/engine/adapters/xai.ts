@@ -1,10 +1,9 @@
 /**
  * xAI adapter — Grok image generation (grok-2-image).
  *
- * The public xAI images API is OpenAI-compatible and TEXT-TO-IMAGE: POST /v1/images/generations with a
- * prompt; it does NOT take image references (Grok Imagine's reference feature is a separate surface).
- * So this adapter ignores `references` — the registry marks grok maxReferenceImages:0, so Gate 1 keeps
- * it out of reference fans anyway. Reads XAI_API_KEY. Endpoint/model confirmed against xAI's docs.
+ * OpenAI-compatible. Text-to-image via POST /v1/images/generations; with references, POST
+ * /v1/images/edits (multipart) — xAI's edits framework accepts source/reference images (up to ~3) to
+ * character-match / compose. Reads XAI_API_KEY.
  */
 
 import {
@@ -14,7 +13,7 @@ import {
   type GenRequest,
   type ImageExecutor,
 } from '../executor';
-import { reasonForStatus } from './_util';
+import { fetchAsBlob, reasonForStatus } from './_util';
 
 const API_MODEL: Record<string, string> = { 'grok-2-image': 'grok-2-image' };
 const COST_PER_IMAGE = 0.05;
@@ -34,14 +33,33 @@ class XaiExecutor implements ImageExecutor {
     }
     const model = API_MODEL[req.modelId] ?? 'grok-2-image';
     const n = Math.max(1, req.n);
+    const refs = req.references ?? [];
 
     let res: Response;
     try {
-      res = await fetch('https://api.x.ai/v1/images/generations', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt: req.prompt, n, response_format: 'url' }),
-      });
+      if (refs.length > 0) {
+        // Reference / character-match → multipart images/edits with the source images.
+        const form = new FormData();
+        form.append('model', model);
+        form.append('prompt', req.prompt);
+        form.append('n', String(n));
+        let idx = 0;
+        for (const ref of refs) {
+          const blob = await fetchAsBlob(ref);
+          if (blob) form.append('image[]', blob, `ref-${idx++}.png`);
+        }
+        res = await fetch('https://api.x.ai/v1/images/edits', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${key}` },
+          body: form,
+        });
+      } else {
+        res = await fetch('https://api.x.ai/v1/images/generations', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, prompt: req.prompt, n, response_format: 'url' }),
+        });
+      }
     } catch {
       yield { type: 'error', reason: 'transport' };
       return;

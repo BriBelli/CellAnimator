@@ -327,22 +327,19 @@ export const IMAGE_MODELS: ImageModel[] = [
     providerModelId: 'grok-2-image',
     tier: 2,
     strengths: { photorealism: 4, prompt_adherence: 4, editing: 2, style_versatility: 4, text_rendering: 3, speed: 4, resolution: 4, consistency: 3, multimodal: 3 },
-    capabilities: ['photorealism', 'fast'],
-    bestFor: ['photoreal', 'expressive characters', 'fast iterations'],
-    supportsEditing: false,
-    // HONEST: the PUBLIC xAI images API (grok-2-image) is TEXT-TO-IMAGE — it does not accept image
-    // references (that's Grok Imagine, the app, on a different surface not exposed as an API we have).
-    // So 0: Grok is excluded from REFERENCE fans (it literally can't use your photo) but competes in
-    // text-to-image fans, where Brian rated it strong. If xAI ships a reference API, bump this + wire it.
-    maxReferenceImages: 0,
+    capabilities: ['photorealism', 'multi_reference', 'fast'],
+    bestFor: ['photoreal', 'expressive characters', 'reference-driven characters', 'fast iterations'],
+    supportsEditing: true,
+    // xAI's images/edits framework accepts source/reference images (up to ~3, more on multi-image
+    // variants). Grok was strong for characters in Brian's tests — it belongs in reference fans.
+    maxReferenceImages: 3,
     aspectRatios: ['1:1', '16:9', '9:16', '3:2', '2:3'],
     costPerImageUsd: [0.02, 0.07],
     maxBatchN: 4,
     batchStrategy: 'parallel',
     brief:
-      'xAI Grok image generation — strong photoreal + expressive character work (Brian rated it a hit for characters where Nano/others faltered). Reference support via the public API is unconfirmed; verify.',
+      'xAI Grok image generation — strong photoreal + expressive character work (Brian rated it a hit for characters where Nano/others faltered). Accepts reference images via images/edits (compose / character-match).',
     sourceRefreshedAt: REFRESHED,
-    needsResearch: true,
   },
 ];
 
