@@ -50,11 +50,12 @@ const CSS = `
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--a2ui-text-tertiary);
 }
 
-/* FAN-OUT — a simple flex-wrap: one column per model, each tile shows the full image. No grid tricks. */
-.pxc-stage-groups { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-5); align-items: flex-start; }
-.pxc-stage-group { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
-.pxc-stage-wrap { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-4); }
-.pxc-stage-wrap > .pxc-stage-tile { flex: 1 1 240px; }
+/* FAN-OUT — a CAPPED auto-fill grid: columns are 300–400px (never full-bleed), packed from the left.
+   One image sits at a sane size instead of ballooning to the whole canvas; three fit above the fold;
+   many wrap and pack like the reference layout. One column per model; tiles stack inside a column. */
+.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 400px)); justify-content: start; gap: var(--a2ui-space-5); align-items: start; }
+.pxc-stage-group { min-width: 0; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
+.pxc-stage-wrap { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 360px)); justify-content: start; gap: var(--a2ui-space-4); }
 .pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -87,7 +88,7 @@ const CSS = `
 .pxc-stage-tile:hover { box-shadow: 0 0 0 1px var(--a2ui-border-default); }
 /* CONTAIN, not cover — never crop what the model made (a character sheet is the whole image). Letterbox
    on the tile bg. */
-.pxc-stage-tile img { width: 100%; height: auto; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
+.pxc-stage-tile img { width: 100%; height: auto; max-height: 72vh; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
 .pxc-stage-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px;

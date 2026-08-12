@@ -123,10 +123,12 @@ export function gate1Filter(
       dropped.push({ modelId: m.id, reason: 'no_edit' });
       continue;
     }
-    if (req.aspectRatio && !m.aspectRatios.includes(req.aspectRatio)) {
-      dropped.push({ modelId: m.id, reason: 'aspect_ratio' });
-      continue;
-    }
+    // ASPECT is NOT a hard bench. A model's hand-typed aspectRatios list is a data hint, not a hard
+    // wall — nearly every image model accepts an arbitrary ratio (or snaps to the nearest), and the
+    // reference-fit already letterboxes onto the target frame. Benching gpt/grok because their list
+    // happens to omit "3:4" is exactly the hand-typed-data-collapses-the-fan bug: it left one Gemini
+    // model standing on a portrait character sheet. Aspect is handled downstream (adapter clamps); a
+    // ratio the model doesn't list only costs a small score nudge (scoreModelForRequest), never a drop.
     if (!hasKey(m.envKey)) {
       dropped.push({ modelId: m.id, reason: 'no_key' });
       continue;
@@ -190,6 +192,9 @@ export function scoreModelForRequest(m: ImageModel, req: RoutingRequest): number
     s += m.strengths.multimodal + (m.capabilities.includes('multi_reference') ? 2 : 0) + m.strengths.consistency;
   }
   for (const need of req.needs) if (m.capabilities.includes(need)) s += 1;
+  // Aspect is a soft preference (never a bench): a model that DOCUMENTS the requested ratio edges out
+  // one that doesn't — but both stay in the fan, so a portrait request still spreads across providers.
+  if (req.aspectRatio && m.aspectRatios.includes(req.aspectRatio)) s += 0.5;
   return s;
 }
 

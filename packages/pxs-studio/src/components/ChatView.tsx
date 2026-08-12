@@ -193,6 +193,21 @@ export default function ChatView({ initialPrompt }: Props) {
   const showIde = activeMedium !== 'chat' && viewMode === 'ide';
   const workspaceMedium: 'image' | 'video' = activeMedium === 'video' ? 'video' : 'image';
 
+  // DISPLAY lens — a vertical pill floated top-right of the STAGE (not the prompt, and clear of the
+  // right-docked Agent panel). Chat (the conversation) over IDE (the workspace). Rendered inside each
+  // stage container so its absolute position tracks the stage, not the whole section.
+  const viewLens =
+    activeMedium !== 'chat' ? (
+      <div className="pxs-viewpill">
+        <button type="button" data-active={viewMode === 'chat'} onClick={() => setViewMode('chat')} title="Chat — the conversation">
+          <Icon name="message-square" size={15} /> Chat
+        </button>
+        <button type="button" data-active={viewMode === 'ide'} onClick={() => setViewMode('ide')} title="IDE — the workspace">
+          <Icon name="sparkles" size={15} /> IDE
+        </button>
+      </div>
+    ) : null;
+
   // Every generated image across the conversation, newest first — the workspace stage's content.
   const stageImages: StageImage[] = [...turns]
     .reverse()
@@ -376,8 +391,8 @@ export default function ChatView({ initialPrompt }: Props) {
           {/* COMMAND ROW — the prompt is the command center (Artlist/Photolift pattern). The MEDIUM pill
               (Chat · Image · Video) is the user's INTENT and DRIVES the nav: pick Image → the Image
               section, and a send becomes a render. The render config (models · images · aspect) rides
-              alongside so it's set BEFORE you send. On the right, the DISPLAY pill (Chat · IDE) picks how
-              you VIEW a creative section — no more toggle floating dead-center at the top. */}
+              alongside so it's set BEFORE you send. The Chat/IDE DISPLAY toggle is NOT here — it lives as
+              a vertical pill floated top-right of the section (out of the prompt). */}
           <div className="pxs-cmd-row">
             <SegmentedControl
               label="Medium"
@@ -391,15 +406,6 @@ export default function ChatView({ initialPrompt }: Props) {
             />
             {activeMedium !== 'chat' && (
               <div className="pxs-cmd-right">
-                <SegmentedControl
-                  label="Display"
-                  value={viewMode}
-                  onChange={setViewMode}
-                  options={[
-                    { value: 'chat', label: 'Chat', icon: <span className="pxs-cmd-seg"><Icon name="message-square" size={13} /> Chat</span> },
-                    { value: 'ide', label: 'IDE', icon: <span className="pxs-cmd-seg"><Icon name="sparkles" size={13} /> IDE</span> },
-                  ]}
-                />
                 <RenderConfig />
               </div>
             )}
@@ -431,11 +437,23 @@ export default function ChatView({ initialPrompt }: Props) {
         .pxs-prompt-show { height: 30px; padding: 0 14px; border-radius: var(--a2ui-radius-full); border: 1px solid var(--pxs-border-subtle); background: var(--a2ui-glass-dark, rgba(20,22,28,0.82)); backdrop-filter: blur(10px); color: var(--a2ui-text-secondary); font-family: var(--a2ui-font-family); font-size: var(--a2ui-text-sm); cursor: pointer; transition: color var(--a2ui-transition-fast), border-color var(--a2ui-transition-fast); }
         .pxs-prompt-show:hover { color: var(--a2ui-text-primary); border-color: var(--a2ui-border-default); }
 
-        /* COMMAND ROW under the composer — medium pills (left) drive the nav/intent; display + render
-           config (right) ride alongside. Replaces the floating top-center lens pill. */
+        /* COMMAND ROW under the composer — medium pills (left) drive the nav/intent; the render config
+           (right) rides alongside. The Chat/IDE display toggle is NOT here (see the vertical pill). */
         .pxs-cmd-row { display: flex; align-items: center; justify-content: space-between; gap: var(--a2ui-space-3); margin-top: 8px; flex-wrap: wrap; }
         .pxs-cmd-right { display: flex; align-items: center; gap: var(--a2ui-space-2); }
         .pxs-cmd-seg { display: inline-flex; align-items: center; gap: 5px; }
+
+        /* The DISPLAY lens — a VERTICAL pill floated top-right of a creative section (out of the prompt).
+           Chat (the conversation) stacked over IDE (the workspace). Glass, above the panel headers. */
+        .pxs-viewpill { position: absolute; top: 14px; right: 16px; z-index: 36; display: flex; flex-direction: column; gap: 2px;
+          padding: 3px; border-radius: var(--a2ui-radius-lg); border: 1px solid var(--pxs-glass-border);
+          background: var(--a2ui-glass-dark, rgba(20,22,28,0.82)); backdrop-filter: blur(10px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+        .pxs-viewpill button { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 46px; padding: 7px 0;
+          border: none; background: none; border-radius: var(--a2ui-radius-md); color: var(--a2ui-text-tertiary);
+          font-family: var(--a2ui-font-family); font-size: 10px; font-weight: var(--a2ui-font-semibold); cursor: pointer;
+          transition: color var(--a2ui-transition-fast), background var(--a2ui-transition-fast); }
+        .pxs-viewpill button:hover { color: var(--a2ui-text-secondary); background: var(--a2ui-bg-hover); }
+        .pxs-viewpill button[data-active="true"] { color: var(--pxs-accent-text); background: var(--a2ui-accent-subtle); }
 
         /* ── THE TRANSITION ─────────────────────────────────────────────────────────────
            Exploration hold: the workspace arrives as one calm piece (fade + a short rise),
@@ -466,6 +484,7 @@ export default function ChatView({ initialPrompt }: Props) {
           {/* CENTER canvas — the CREATIONS (gallery) + the floating color-coded PROMPT (a live view
               of the Build panel; click a clause to edit it there). */}
           <div className="relative flex-1 flex min-w-0">
+            {viewLens}
             <ImageStage
               images={stageImages}
               onSaveAsset={onSaveAsset}
@@ -574,7 +593,7 @@ export default function ChatView({ initialPrompt }: Props) {
         )
       ) : (
         /* Chat column — floats over the shell's dormant DigitalWall (no local backdrop). */
-        <div className="relative flex-1 flex flex-col min-w-0">{conversation(true)}</div>
+        <div className="relative flex-1 flex flex-col min-w-0">{viewLens}{conversation(true)}</div>
       )}
     </div>
   );
