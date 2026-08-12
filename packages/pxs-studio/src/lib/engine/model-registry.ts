@@ -330,9 +330,10 @@ export const IMAGE_MODELS: ImageModel[] = [
     capabilities: ['photorealism', 'multi_reference', 'fast'],
     bestFor: ['photoreal', 'expressive characters', 'reference-driven characters', 'fast iterations'],
     supportsEditing: true,
-    // xAI's images/edits framework accepts source/reference images (up to ~3, more on multi-image
-    // variants). Grok was strong for characters in Brian's tests — it belongs in reference fans.
-    maxReferenceImages: 3,
+    // xAI enforces NO hard count limit on reference images — the constraint is FILE SIZE (≤20 MiB per
+    // image, ~25 MB payload), not count. So set the cap high (8, the multi-image variant's practical
+    // ceiling) rather than a made-up small number; oversized files surface as a clean API error.
+    maxReferenceImages: 8,
     aspectRatios: ['1:1', '16:9', '9:16', '3:2', '2:3'],
     costPerImageUsd: [0.02, 0.07],
     maxBatchN: 4,
