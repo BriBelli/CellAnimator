@@ -319,6 +319,10 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                 // it rides along to the specialist on transfer + rehydrates on reload.
                 references,
                 reference_asset_ids: referenceAssetIds,
+                // The composer's render config (models · images · aspect) rides along too — when the
+                // intent is Image/Video the Operator hands it straight to the specialist, so a render
+                // uses what you SET, not the default. Without this the fan silently fell back to 1.
+                fan: st.fanConfig,
               }
         ),
       });

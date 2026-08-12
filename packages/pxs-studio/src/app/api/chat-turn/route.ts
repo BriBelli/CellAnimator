@@ -323,16 +323,18 @@ export async function POST(req: Request) {
           const result = parseClassifyResult(JSON.stringify(toolUse.input ?? {}));
           send({ type: 'step', id: 'choosing', status: 'done' });
 
-          // EXPLICIT-GENERATE OVERRIDE: the user attached reference image(s) AND wrote a real prompt —
-          // that's an unambiguous "generate from this" (their material + their spec), not a consult. Honor
-          // the intent: transfer to the image agent and RENDER NOW (depth 'quick'), whatever the Operator's
-          // more cautious verdict was. Never override intent — a full prompt + refs IS the intent.
-          if (references.length > 0 && prompt.trim().length >= 25) {
+          // INTENT-DRIVEN RENDER: the medium is now an EXPLICIT choice the user makes on the composer
+          // (Chat · Image · Video). If they set the intent to Image/Video and hit send, that IS the
+          // submit — transfer to the specialist and RENDER NOW (depth 'quick') with their config. No
+          // heuristic, no surprise: a Chat-medium send is ALWAYS a conversation (the Operator may
+          // propose or transfer for setup, but never eager-generates). This is the "don't create images
+          // until I hit submit" rule — the medium pill is the submit.
+          if ((section === 'image' || section === 'video') && prompt.trim().length > 0) {
             result.action = 'transfer';
             result.frame = {
               goal: result.frame?.goal || prompt.slice(0, 200),
               subject: result.frame?.subject,
-              medium: result.frame?.medium ?? 'image',
+              medium: section === 'video' ? 'video' : 'image',
               depth: 'quick',
             };
           }

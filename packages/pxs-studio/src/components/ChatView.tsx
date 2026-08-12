@@ -373,13 +373,37 @@ export default function ChatView({ initialPrompt }: Props) {
               user brings (prompt + references) and transfers it to the specialist — it never gatekeeps.
               References persist on the turn (chat-turn route) so they ride along + rehydrate on reload. */}
           <Composer value={draft} onChange={setDraft} onSubmit={submit} attachEnabled />
-          {/* The fan-out picker — models · images · aspect. On the composer bar (where you render from),
-              so it's always in reach. Image/video sections only (chat home doesn't generate). */}
-          {activeMedium !== 'chat' && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <RenderConfig />
-            </div>
-          )}
+          {/* COMMAND ROW — the prompt is the command center (Artlist/Photolift pattern). The MEDIUM pill
+              (Chat · Image · Video) is the user's INTENT and DRIVES the nav: pick Image → the Image
+              section, and a send becomes a render. The render config (models · images · aspect) rides
+              alongside so it's set BEFORE you send. On the right, the DISPLAY pill (Chat · IDE) picks how
+              you VIEW a creative section — no more toggle floating dead-center at the top. */}
+          <div className="pxs-cmd-row">
+            <SegmentedControl
+              label="Medium"
+              value={activeMedium}
+              onChange={(m) => setActiveMedium(m as 'chat' | 'image' | 'video')}
+              options={[
+                { value: 'chat', label: 'Chat', icon: <span className="pxs-cmd-seg">Chat</span> },
+                { value: 'image', label: 'Image', icon: <span className="pxs-cmd-seg">Image</span> },
+                { value: 'video', label: 'Video', icon: <span className="pxs-cmd-seg">Video</span> },
+              ]}
+            />
+            {activeMedium !== 'chat' && (
+              <div className="pxs-cmd-right">
+                <SegmentedControl
+                  label="Display"
+                  value={viewMode}
+                  onChange={setViewMode}
+                  options={[
+                    { value: 'chat', label: 'Chat', icon: <span className="pxs-cmd-seg"><Icon name="message-square" size={13} /> Chat</span> },
+                    { value: 'ide', label: 'IDE', icon: <span className="pxs-cmd-seg"><Icon name="sparkles" size={13} /> IDE</span> },
+                  ]}
+                />
+                <RenderConfig />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -407,10 +431,11 @@ export default function ChatView({ initialPrompt }: Props) {
         .pxs-prompt-show { height: 30px; padding: 0 14px; border-radius: var(--a2ui-radius-full); border: 1px solid var(--pxs-border-subtle); background: var(--a2ui-glass-dark, rgba(20,22,28,0.82)); backdrop-filter: blur(10px); color: var(--a2ui-text-secondary); font-family: var(--a2ui-font-family); font-size: var(--a2ui-text-sm); cursor: pointer; transition: color var(--a2ui-transition-fast), border-color var(--a2ui-transition-fast); }
         .pxs-prompt-show:hover { color: var(--a2ui-text-primary); border-color: var(--a2ui-border-default); }
 
-        /* The shared [Chat | IDE] lens pill — floats top-centre of a creative section, over both the
-           chat column and the IDE. z above the panel headers so it's always reachable. */
-        .pxs-viewpill { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 35; }
-        .pxs-viewpill-seg { display: inline-flex; align-items: center; gap: 6px; }
+        /* COMMAND ROW under the composer — medium pills (left) drive the nav/intent; display + render
+           config (right) ride alongside. Replaces the floating top-center lens pill. */
+        .pxs-cmd-row { display: flex; align-items: center; justify-content: space-between; gap: var(--a2ui-space-3); margin-top: 8px; flex-wrap: wrap; }
+        .pxs-cmd-right { display: flex; align-items: center; gap: var(--a2ui-space-2); }
+        .pxs-cmd-seg { display: inline-flex; align-items: center; gap: 5px; }
 
         /* ── THE TRANSITION ─────────────────────────────────────────────────────────────
            Exploration hold: the workspace arrives as one calm piece (fade + a short rise),
@@ -429,20 +454,6 @@ export default function ChatView({ initialPrompt }: Props) {
           .pxs-ws-enter, .pxs-guide-snap, .pxs-prompt-enter { animation: none; }
         }
       `}</style>
-      {/* The shared lens pill — only in a creative section (chat home is always the conversation). */}
-      {activeMedium !== 'chat' && (
-        <div className="pxs-viewpill">
-          <SegmentedControl
-            label="Section view"
-            value={viewMode}
-            onChange={setViewMode}
-            options={[
-              { value: 'chat', label: 'Chat', icon: <span className="pxs-viewpill-seg"><Icon name="message-square" size={14} /> Chat</span> },
-              { value: 'ide', label: 'IDE', icon: <span className="pxs-viewpill-seg"><Icon name="sparkles" size={14} /> IDE</span> },
-            ]}
-          />
-        </div>
-      )}
       {showIde ? (
         workspaceMedium === 'video' ? (
           /* VIDEO IDE — the storyboard + scene-builder scaffold (Agent reuses the same conversation). */
