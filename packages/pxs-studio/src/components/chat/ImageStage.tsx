@@ -50,9 +50,11 @@ const CSS = `
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--a2ui-text-tertiary);
 }
 
-/* FAN-OUT groups — one column per model (decision closure: every model's take side by side). */
-.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--a2ui-space-5); align-items: start; min-width: 0; }
-.pxc-stage-group { display: flex; flex-direction: column; gap: var(--a2ui-space-3); min-width: 0; }
+/* FAN-OUT — a simple flex-wrap: one column per model, each tile shows the full image. No grid tricks. */
+.pxc-stage-groups { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-5); align-items: flex-start; }
+.pxc-stage-group { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
+.pxc-stage-wrap { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-4); }
+.pxc-stage-wrap > .pxc-stage-tile { flex: 1 1 240px; }
 .pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -85,7 +87,7 @@ const CSS = `
 .pxc-stage-tile:hover { box-shadow: 0 0 0 1px var(--a2ui-border-default); }
 /* CONTAIN, not cover — never crop what the model made (a character sheet is the whole image). Letterbox
    on the tile bg. */
-.pxc-stage-tile img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
+.pxc-stage-tile img { width: 100%; height: auto; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
 .pxc-stage-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px;
@@ -280,15 +282,13 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
                       <span className="pxc-stage-model">{g.label}</span>
                       <span className="pxc-stage-count">{g.items.length}</span>
                     </div>
-                    <div className="pxc-stage-grid">
-                      {g.items.map(({ img, gi }) => renderTile(img, gi, 'pxc-bento-sq'))}
-                    </div>
+                    {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="pxc-stage-grid">
-                {images.map((img, i) => renderTile(img, i, bentoClass(i)))}
+              <div className="pxc-stage-wrap">
+                {images.map((img, i) => renderTile(img, i, ''))}
               </div>
             )}
           </div>
