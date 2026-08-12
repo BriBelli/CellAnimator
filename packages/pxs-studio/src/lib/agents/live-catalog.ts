@@ -44,6 +44,17 @@ export function composeCatalog(
   );
   if (retired.size > 0) catalog = catalog.filter((m) => !retired.has(m.id));
 
+  // 2b. PATCH seed models with RESEARCHED capabilities (seed_override cards, medium/high confidence).
+  // This is what makes the hand-typed seed give way to SOURCED facts: the card's `card` holds the
+  // researched partial (maxReferenceImages, supportsEditing, capabilities, aspectRatios). Low confidence
+  // is ignored (stays seed — honest, never overwrites truth with a weak guess).
+  const patches = new Map<string, Partial<ImageModel>>(
+    [...cards.values()]
+      .filter((c) => c.origin === 'seed_override' && !c.retired && c.confidence !== 'low' && c.card && typeof c.card === 'object')
+      .map((c) => [c.model_id, c.card as Partial<ImageModel>])
+  );
+  if (patches.size > 0) catalog = catalog.map((m) => (patches.has(m.id) ? { ...m, ...patches.get(m.id) } : m));
+
   // 3. Append discovered+researched models that aren't already present.
   const seen = new Set(catalog.map((m) => m.id));
   for (const c of cards.values()) {

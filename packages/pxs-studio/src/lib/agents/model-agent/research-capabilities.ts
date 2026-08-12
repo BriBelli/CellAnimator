@@ -59,7 +59,7 @@ export async function researchModelCapabilities(
   try {
     const msg = await client.messages.create({
       model: MODEL,
-      max_tokens: 700,
+      max_tokens: 1024,
       thinking: { type: 'adaptive' },
       system: SYSTEM,
       messages: [{ role: 'user', content: `MODEL: ${model.label} (${model.provider})\n\nSEARCH RESULTS:\n${corpus}` }],
