@@ -426,7 +426,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     const assembled = builderParts.map((p) => p.value?.trim()).filter(Boolean).join(', ');
     const req: RoutingRequest = {
       intent: assembled || frame.goal,
-      needs: refCount > 0 ? ['multi_reference'] : [],
+      needs: [], // reference capacity is handled by Gate 1 (req.references), not a blanket multi_reference tag
       count: frame.count,
       fanModels: fanModelsN,
       perModel: perModelN,
@@ -489,7 +489,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
       if (instruction) parts.push(`The user shaped this in the Prompt Builder — render EXACTLY this, it is the final prompt:\n${instruction}`);
       if (refCount > 0)
         parts.push(
-          `The user attached ${refCount} reference image${refCount === 1 ? '' : 's'} — plan to USE them (compose/edit from them; keep the subject consistent). Include "multi_reference" in needs.`
+          `The user attached ${refCount} reference image${refCount === 1 ? '' : 's'} — plan to USE them (compose/edit from them; keep the subject consistent). Do NOT add "multi_reference" to needs — reference capacity is handled downstream.`
         );
       userContent = parts.join('\n\n');
     }
@@ -530,9 +530,9 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   const needs = Array.isArray(plan.needs)
     ? (plan.needs.filter((n): n is Capability => typeof n === 'string' && (VALID_CAPS as readonly string[]).includes(n)))
     : [];
-  // Attached references only matter if we route to a model that can consume them → force the
-  // capability so Gate 1 picks a ref-capable model (e.g. nano-banana), never a single-image one.
-  if (refCount > 0 && !needs.includes('multi_reference')) needs.push('multi_reference');
+  // Reference capacity is enforced by Gate 1 from req.references (a model just needs to ACCEPT that
+  // many), so we do NOT force a blanket 'multi_reference' need — that wrongly benched ref-capable
+  // models (Flux etc.). The plan's own needs (photoreal/text/…) still apply.
   const req: RoutingRequest = {
     intent: typeof plan.prompt === 'string' && plan.prompt.trim() ? plan.prompt.trim() : frame.goal,
     needs,

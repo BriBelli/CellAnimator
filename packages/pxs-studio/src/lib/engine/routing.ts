@@ -105,6 +105,20 @@ export function gate1Filter(
       dropped.push({ modelId: m.id, reason: 'missing_capability' });
       continue;
     }
+    // REFERENCES: keep any model that can ACCEPT this many references — accepting a reference is NOT
+    // the same as "multi_reference" (composing from >1). A single ref only needs capacity >= 1. This is
+    // what wrongly benched Flux/etc. (they take references fine). Capacity = the flat pool, or the sum of
+    // typed per-role pools. NOTE: the counts themselves live in the registry and must be kept ACCURATE by
+    // the Model agent — a wrong count here is a data bug, not a routing bug.
+    if (req.references && req.references.length > 0) {
+      const capacity = m.referenceLimits
+        ? m.referenceLimits.object + m.referenceLimits.character + m.referenceLimits.style
+        : m.maxReferenceImages;
+      if (capacity < req.references.length) {
+        dropped.push({ modelId: m.id, reason: 'missing_capability' });
+        continue;
+      }
+    }
     if (req.editing && !m.supportsEditing) {
       dropped.push({ modelId: m.id, reason: 'no_edit' });
       continue;
