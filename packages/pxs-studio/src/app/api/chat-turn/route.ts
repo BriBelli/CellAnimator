@@ -5,7 +5,7 @@ import {
   parseClassifyResult,
   STUB_SUGGESTIONS,
 } from '../../../lib/chat-classify';
-import { runImageAgent } from '../../../lib/agents/image-agent';
+import { runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { operatorSkills } from '../../../lib/agents/skills';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
@@ -95,6 +95,7 @@ export async function POST(req: Request) {
     section?: string;
     references?: string[];
     reference_asset_ids?: (string | null)[];
+    fan?: FanConfigInput;
   };
   try {
     body = await req.json();
@@ -322,6 +323,20 @@ export async function POST(req: Request) {
           const result = parseClassifyResult(JSON.stringify(toolUse.input ?? {}));
           send({ type: 'step', id: 'choosing', status: 'done' });
 
+          // EXPLICIT-GENERATE OVERRIDE: the user attached reference image(s) AND wrote a real prompt —
+          // that's an unambiguous "generate from this" (their material + their spec), not a consult. Honor
+          // the intent: transfer to the image agent and RENDER NOW (depth 'quick'), whatever the Operator's
+          // more cautious verdict was. Never override intent — a full prompt + refs IS the intent.
+          if (references.length > 0 && prompt.trim().length >= 25) {
+            result.action = 'transfer';
+            result.frame = {
+              goal: result.frame?.goal || prompt.slice(0, 200),
+              subject: result.frame?.subject,
+              medium: result.frame?.medium ?? 'image',
+              depth: 'quick',
+            };
+          }
+
           if (result.action === 'propose' && result.proposal) {
             // PROPOSE: oriented, but a real fork in HOW to do it well → present WORKFLOW PATHS as an
             // A2UI options block. SPENDS NOTHING. The user's pick returns as their next turn, which
@@ -355,7 +370,15 @@ export async function POST(req: Request) {
             };
             // Send a trimmed frame to the client (no budget); nav flips to `to`.
             send({ type: 'transfer', to, frame: { goal: frame.goal, subject: frame.subject, medium } });
-            const agentTurn = result.frame.depth === 'quick' ? { userMessage: prompt } : undefined;
+            // Carry the front-door REFERENCES + the picker's fan CONFIG into the specialist — without
+            // these the agent generated blind (ignoring the user's photo + model/aspect choices), which
+            // is exactly why results looked nothing like the reference. `quick` renders now; `guided`
+            // opens the builder — both get the refs + config.
+            const agentTurn = {
+              userMessage: result.frame.depth === 'quick' ? prompt : undefined,
+              references: references.length > 0 ? references : undefined,
+              fan: body.fan,
+            };
             for await (const ev of runImageAgent(frame, agentTurn)) {
               if (ev.type === 'agent_usage') {
                 agentInTok += ev.inputTokens;
