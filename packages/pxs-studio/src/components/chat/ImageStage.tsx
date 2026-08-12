@@ -51,7 +51,7 @@ const CSS = `
 }
 
 /* FAN-OUT groups — one column per model (decision closure: every model's take side by side). */
-.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--a2ui-space-5); align-items: start; }
+.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--a2ui-space-5); align-items: start; min-width: 0; }
 .pxc-stage-group { display: flex; flex-direction: column; gap: var(--a2ui-space-3); min-width: 0; }
 .pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
@@ -62,7 +62,7 @@ const CSS = `
   color: var(--pxs-accent-text); background: var(--a2ui-accent-subtle); border: 1px solid var(--a2ui-border-subtle); }
 .pxc-stage-count { margin-left: auto; flex-shrink: 0; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); font-variant-numeric: tabular-nums; }
 
-.pxc-stage-scroll { flex: 1; overflow-y: auto; padding: var(--a2ui-space-5) var(--a2ui-space-6) var(--a2ui-space-8); }
+.pxc-stage-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; padding: var(--a2ui-space-5) var(--a2ui-space-6) var(--a2ui-space-8); }
 /* BENTO — a repeating 4-tile rhythm (hero 16/9 span-2 · square · square · wide 16/10 span-2) over a
    2-col grid, so results pack like the mock instead of a uniform square grid. "dense" backfills the
    holes that spanning tiles would otherwise leave. */
@@ -82,10 +82,10 @@ const CSS = `
 .pxc-bento-sq   { aspect-ratio: 1 / 1; }
 /* BOLD-mode accent washes — alternating coral/violet radial under each tile (behind the image, so a
    real thumbnail covers it; it reads on empty/loading tiles). Professional flips --px-tint-* neutral. */
-.pxc-stage-tile[data-wash="a"] { background: radial-gradient(130% 110% at 28% 18%, var(--px-tint-coral), var(--a2ui-bg-tertiary) 68%); }
-.pxc-stage-tile[data-wash="b"] { background: radial-gradient(130% 110% at 72% 24%, var(--px-tint-violet), var(--a2ui-bg-tertiary) 68%); }
 .pxc-stage-tile:hover { box-shadow: 0 0 0 1px var(--a2ui-border-default); }
-.pxc-stage-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* CONTAIN, not cover — never crop what the model made (a character sheet is the whole image). Letterbox
+   on the tile bg. */
+.pxc-stage-tile img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
 .pxc-stage-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px;
@@ -227,8 +227,8 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
   // (Tiles keep their global index for the viewer, so reordering columns is purely visual.)
   groups.sort((a, b) => (b.items[0]?.img.score ?? 0) - (a.items[0]?.img.score ?? 0));
 
-  const renderTile = (img: StageImage, gi: number, li: number) => (
-    <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${bentoClass(li)}`} data-wash={li % 2 === 0 ? 'a' : 'b'} tabIndex={0}>
+  const renderTile = (img: StageImage, gi: number, cls: string) => (
+    <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${cls}`} tabIndex={0}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={img.url} alt={img.modelLabel || 'generated image'} />
       <div className="pxc-stage-overlay">
@@ -281,14 +281,14 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
                       <span className="pxc-stage-count">{g.items.length}</span>
                     </div>
                     <div className="pxc-stage-grid">
-                      {g.items.map(({ img, gi }, li) => renderTile(img, gi, li))}
+                      {g.items.map(({ img, gi }) => renderTile(img, gi, 'pxc-bento-sq'))}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="pxc-stage-grid">
-                {images.map((img, i) => renderTile(img, i, i))}
+                {images.map((img, i) => renderTile(img, i, bentoClass(i)))}
               </div>
             )}
           </div>
