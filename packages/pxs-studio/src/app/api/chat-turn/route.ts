@@ -323,19 +323,19 @@ export async function POST(req: Request) {
           const result = parseClassifyResult(JSON.stringify(toolUse.input ?? {}));
           send({ type: 'step', id: 'choosing', status: 'done' });
 
-          // INTENT-DRIVEN RENDER: the medium is now an EXPLICIT choice the user makes on the composer
-          // (Chat · Image · Video). If they set the intent to Image/Video and hit send, that IS the
-          // submit — transfer to the specialist and RENDER NOW (depth 'quick') with their config. No
-          // heuristic, no surprise: a Chat-medium send is ALWAYS a conversation (the Operator may
-          // propose or transfer for setup, but never eager-generates). This is the "don't create images
-          // until I hit submit" rule — the medium pill is the submit.
+          // INTENT-DRIVEN TRANSFER (never auto-render): setting the medium to Image/Video means "take me
+          // to the specialist for this" — so we ALWAYS transfer to it, but land GUIDED: the specialist
+          // opens the Prompt Builder in the IDE, confirms the prompt + references WITH the user, and does
+          // NOT spend on a render. Rendering is an explicit act in the workspace (the Render button, or an
+          // explicit "generate these" follow-up). Brian's line: "I wouldn't expect images generated there
+          // [the chat] — the image model should work with me unless I literally say create me these."
           if ((section === 'image' || section === 'video') && prompt.trim().length > 0) {
             result.action = 'transfer';
             result.frame = {
               goal: result.frame?.goal || prompt.slice(0, 200),
               subject: result.frame?.subject,
               medium: section === 'video' ? 'video' : 'image',
-              depth: 'quick',
+              depth: 'guided',
             };
           }
 

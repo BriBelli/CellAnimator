@@ -311,9 +311,12 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   const perModelN = Math.max(1, fanCfg?.perModel ?? FANOUT_DEFAULT_PER_MODEL);
   const fanAspect = fanCfg?.aspect;
   const refCount = turn.references?.length ?? 0;
-  // A workspace follow-up is an instruction OR attached references (either means "iterate", not
-  // "first anchor") — so skip re-emitting the reference recommendation.
-  const followUp = instruction.length > 0 || refCount > 0;
+  // RENDER vs COLLABORATE: a render leg needs an EXPLICIT instruction (the Render button sends the
+  // assembled prompt; a "generate these" follow-up sends text). Attaching references ALONE is NOT a
+  // render command — it's material to shape in the builder. This is the line Brian drew: a describe-
+  // prompt with a photo lands in the IDE to be confirmed, never auto-rendered. (refCount still tells the
+  // consult leg to plan around the references + skip the "attach one" recommendation.)
+  const followUp = instruction.length > 0;
 
   // 0) THE COUPLING — if the message arrives WITH the current Build state, the user is shaping the
   //    prompt WITH the agent. Decide edit / render / answer instead of always rendering.
