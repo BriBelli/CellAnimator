@@ -26,7 +26,7 @@ export interface GalleryTile {
 
 /** Events the coordinator streams while curating + running the workflow. */
 export type CoordEvent =
-  | { type: 'routed'; decision: RoutingDecision }
+  | { type: 'routed'; decision: RoutingDecision; models: { label: string; n: number }[] }
   | { type: 'model_start'; modelId: string; modelLabel: string; n: number }
   | { type: 'tile'; tile: GalleryTile; totalSoFar: number }
   | { type: 'model_error'; modelId: string; reason: string }
@@ -65,7 +65,11 @@ export async function* coordinateImage(
     yield { type: 'error', message: 'No configured image provider can satisfy this request.' };
     return;
   }
-  yield { type: 'routed', decision };
+  yield {
+    type: 'routed',
+    decision,
+    models: decision.fanout.map((r) => ({ label: getModel(r.modelId)?.label ?? r.modelId, n: r.n })),
+  };
 
   // Guard the whole fan-out against the ceiling up front — on the WORST-CASE (high) estimate,
   // so a fan-out whose max could blow the cap never starts.

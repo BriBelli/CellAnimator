@@ -196,6 +196,9 @@ export type ImageAgentEvent =
   /** THE COUPLING: the agent edited a Build part from a natural-language instruction (no render). */
   | { type: 'part_edit'; id: string; value: string }
   | { type: 'gen_start' }
+  /** The fan PLAN — the models about to render (label + how many each), emitted the instant routing
+   *  resolves so the stage can show ALL N loaders at once (you see every model is cooking, not one). */
+  | { type: 'gen_plan'; models: { label: string; n: number }[] }
   | { type: 'image'; url: string; modelLabel: string; index: number; score?: number }
   | { type: 'gen_error'; message: string }
   /** A gentle non-blocking heads-up (best-effort shortfall) — forwarded from the coordinator. */
@@ -443,6 +446,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     for await (const ev of coordinateImage(req, { maxCostUsd: frame.budgetUsd })) {
       if (ev.type === 'routed') {
         scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
+        yield { type: 'gen_plan', models: ev.models };
       } else if (ev.type === 'tile') {
         yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1, score: scoreByModel[ev.tile.modelId] };
       } else if (ev.type === 'done') {

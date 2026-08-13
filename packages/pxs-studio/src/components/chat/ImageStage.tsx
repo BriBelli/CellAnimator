@@ -30,6 +30,9 @@ export interface StageImage {
 interface ImageStageProps {
   images: StageImage[];
   generating: boolean;
+  /** The active render's fan plan (model label + images each) — drives one loader group per model so
+   *  every model in the fan shows as "cooking" at once, not a single ambiguous spinner. */
+  genPlan?: { label: string; n: number }[];
   medium: 'image' | 'video';
   /** The active workflow's subject/goal — personalizes the empty state to the in-state context
    *  (consult-first framing) instead of a generic placeholder. */
@@ -50,12 +53,12 @@ const CSS = `
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--a2ui-text-tertiary);
 }
 
-/* FAN-OUT — a CAPPED auto-fill grid: columns are 300–400px (never full-bleed), packed from the left.
-   One image sits at a sane size instead of ballooning to the whole canvas; three fit above the fold;
-   many wrap and pack like the reference layout. One column per model; tiles stack inside a column. */
-.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 400px)); justify-content: start; gap: var(--a2ui-space-5); align-items: start; }
+/* FAN-OUT — one column per model, packed from the left. EVERY tile is the SAME FIXED SIZE (fixed column
+   width × a fixed 4:3 box, image letterboxed inside): no more "one big, one small" — uniform, and three
+   models sit side-by-side above the fold. Columns are a fixed width so the grid never stretches a lone
+   image to fill the canvas. */
+.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fill, var(--pxc-tile-w, 340px)); justify-content: start; gap: var(--a2ui-space-5) var(--a2ui-space-4); align-items: start; }
 .pxc-stage-group { min-width: 0; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
-.pxc-stage-wrap { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 360px)); justify-content: start; gap: var(--a2ui-space-4); }
 .pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -75,7 +78,7 @@ const CSS = `
   grid-auto-flow: row dense;
 }
 .pxc-stage-tile {
-  position: relative; overflow: hidden;
+  position: relative; overflow: hidden; aspect-ratio: 4 / 3;
   border-radius: var(--a2ui-radius-lg); background: var(--a2ui-bg-tertiary);
   box-shadow: 0 0 0 1px var(--pxs-border-subtle);
   transition: box-shadow var(--a2ui-transition-fast);
@@ -88,7 +91,7 @@ const CSS = `
 .pxc-stage-tile:hover { box-shadow: 0 0 0 1px var(--a2ui-border-default); }
 /* CONTAIN, not cover — never crop what the model made (a character sheet is the whole image). Letterbox
    on the tile bg. */
-.pxc-stage-tile img { width: 100%; height: auto; max-height: 72vh; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
+.pxc-stage-tile img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
 .pxc-stage-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px;
@@ -149,13 +152,17 @@ const CSS = `
   color: var(--a2ui-text-secondary); background: var(--a2ui-glass-dark); backdrop-filter: blur(10px);
   border: 1px solid var(--pxs-glass-border); font-variant-numeric: tabular-nums; }
 .pxc-stage-pending {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   color: var(--a2ui-text-tertiary); font-size: var(--a2ui-text-sm);
-  aspect-ratio: 1 / 1; border-radius: var(--a2ui-radius-lg);
+  aspect-ratio: 4 / 3; border-radius: var(--a2ui-radius-lg);
   background: var(--a2ui-bg-tertiary); box-shadow: 0 0 0 1px var(--pxs-border-subtle);
   animation: pxc-stage-pulse 1.4s ease-in-out infinite;
 }
-@keyframes pxc-stage-pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+.pxc-stage-spinner { width: 15px; height: 15px; flex-shrink: 0; border-radius: 50%;
+  border: 2px solid var(--pxs-border-subtle); border-top-color: var(--pxs-accent-text);
+  animation: pxc-stage-spin 0.7s linear infinite; }
+@keyframes pxc-stage-spin { to { transform: rotate(360deg); } }
+@keyframes pxc-stage-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 0.9; } }
 
 /* Empty state — the mockup's clean full-bleed canvas: the shared <GreetingHero> lockup invites the
    first prompt (the workflow carousel is a later slice). Calm, no glyph, no marketing. The title +
@@ -181,7 +188,7 @@ function bentoClass(i: number): string {
   return 'pxc-bento-sq';
 }
 
-export function ImageStage({ images, generating, medium, contextLabel, onSaveAsset }: ImageStageProps) {
+export function ImageStage({ images, generating, genPlan, medium, contextLabel, onSaveAsset }: ImageStageProps) {
   const isVideo = medium === 'video';
   const label = isVideo ? 'video' : 'image';
   const hasContent = images.length > 0 || generating;
@@ -215,19 +222,31 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
 
   // Group the fan-out results by MODEL — one column per model (decision closure: every model's take
   // side by side). Preserve each tile's GLOBAL index so the full-screen viewer still walks the whole set.
-  const groups: { label: string; items: { img: StageImage; gi: number }[] }[] = [];
+  const arrived = new Map<string, { img: StageImage; gi: number }[]>();
   images.forEach((img, gi) => {
     const label = img.modelLabel || 'Model';
-    let g = groups.find((x) => x.label === label);
-    if (!g) {
-      g = { label, items: [] };
-      groups.push(g);
-    }
-    g.items.push({ img, gi });
+    if (!arrived.has(label)) arrived.set(label, []);
+    arrived.get(label)!.push({ img, gi });
   });
+
+  // MERGE the fan PLAN with what's arrived: every planned model gets a column NOW (with its tiles so far
+  // + a loader per image still cooking), so you see all N models working at once — not one lone spinner.
+  // Fall back to arrived-only when there's no plan (e.g. reload of a finished render).
+  const plan = generating && genPlan && genPlan.length > 0 ? genPlan : null;
+  const groups: { label: string; items: { img: StageImage; gi: number }[]; pending: number }[] = plan
+    ? plan.map((p) => {
+        const items = arrived.get(p.label) ?? [];
+        return { label: p.label, items, pending: Math.max(0, p.n - items.length) };
+      })
+    : [...arrived.entries()].map(([label, items]) => ({ label, items, pending: 0 }));
+  // A model that streamed a tile but wasn't in the plan (safety) still gets its column.
+  if (plan) {
+    for (const [label, items] of arrived) {
+      if (!plan.some((p) => p.label === label)) groups.push({ label, items, pending: 0 });
+    }
+  }
   const multiModel = groups.length > 1;
   // Best-fit FIRST — the agent's ranking becomes the column order, made explicit with a #rank badge.
-  // (Tiles keep their global index for the viewer, so reordering columns is purely visual.)
   groups.sort((a, b) => (b.items[0]?.img.score ?? 0) - (a.items[0]?.img.score ?? 0));
 
   const renderTile = (img: StageImage, gi: number, cls: string) => (
@@ -269,29 +288,33 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
         <>
           <div className="pxc-stage-head"><span className="pxc-stage-label">Results</span></div>
           <div className="pxc-stage-scroll">
-            {generating && (
-              <div className="pxc-stage-grid" style={{ marginBottom: 'var(--a2ui-space-4)' }}>
-                <div className="pxc-stage-pending pxc-bento-sq">Generating…</div>
-              </div>
-            )}
-            {multiModel ? (
-              <div className="pxc-stage-groups">
-                {groups.map((g, ri) => (
-                  <div key={g.label} className="pxc-stage-group">
+            {/* One column per model (planned OR arrived). Each shows its tiles + a loader per image still
+                cooking — so all N models read as "working" at once, and every tile is the SAME fixed size. */}
+            <div className="pxc-stage-groups">
+              {/* Pre-routing: generating but the fan isn't known yet — one honest loader until gen_plan lands. */}
+              {generating && groups.length === 0 && (
+                <div className="pxc-stage-group">
+                  <div className="pxc-stage-pending"><span className="pxc-stage-spinner" /> Routing…</div>
+                </div>
+              )}
+              {groups.map((g, ri) => (
+                <div key={g.label} className="pxc-stage-group">
+                  {multiModel && (
                     <div className="pxc-stage-group-head">
                       {g.items[0]?.img.score != null && <span className="pxc-stage-score" title="Model agent's fit rank for this prompt">#{ri + 1}</span>}
                       <span className="pxc-stage-model">{g.label}</span>
-                      {g.items.length > 1 && <span className="pxc-stage-count" title="Images from this model">{g.items.length}</span>}
+                      {g.items.length + g.pending > 1 && <span className="pxc-stage-count" title="Images from this model">{g.items.length + g.pending}</span>}
                     </div>
-                    {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="pxc-stage-wrap">
-                {images.map((img, i) => renderTile(img, i, ''))}
-              </div>
-            )}
+                  )}
+                  {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
+                  {Array.from({ length: g.pending }).map((_, i) => (
+                    <div key={`pending-${g.label}-${i}`} className="pxc-stage-pending">
+                      <span className="pxc-stage-spinner" /> {g.label}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
           </div>
         </>
       ) : (

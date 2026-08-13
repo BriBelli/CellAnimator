@@ -160,6 +160,9 @@ export interface ChatTurn {
   images: GalleryImage[];
   /** True while a dispatched image workflow is generating (drives the gallery loading state). */
   generating?: boolean;
+  /** The fan PLAN for this render — the models routing chose (label + images each), set the instant
+   *  routing resolves so the stage shows ALL N loaders at once. Cleared on gen_done. */
+  genPlan?: { label: string; n: number }[];
   /** Gentle non-blocking notices from the coordinator (best-effort shortfalls) — shown muted. */
   notices?: string[];
   /** Set when the Operator TRANSFERRED this turn to a specialist (large workflow) — attributes the
@@ -428,6 +431,9 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
             }));
           } else if (evt.type === 'gen_start') {
             patch(id, { generating: true });
+          } else if (evt.type === 'gen_plan') {
+            // Routing resolved — the fan is known. Record it so the stage paints ALL N model loaders now.
+            patch(id, { generating: true, genPlan: Array.isArray(evt.models) ? evt.models : [] });
           } else if (evt.type === 'image') {
             // A generated tile arrived — append it (streamed gallery).
             set((s) => ({
@@ -444,7 +450,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
               ),
             }));
           } else if (evt.type === 'gen_done') {
-            patch(id, { generating: false });
+            patch(id, { generating: false, genPlan: undefined });
           } else if (evt.type === 'notice') {
             // Gentle best-effort heads-up (not an error) — append to the turn's notices.
             set((s) => ({
