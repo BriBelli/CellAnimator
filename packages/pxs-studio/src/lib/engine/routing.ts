@@ -22,6 +22,7 @@ import {
   type Capability,
   type ImageModel,
 } from './model-registry';
+import { classifyRequest, crossValidateFit, pickRoster } from './selection';
 
 const MODEL = 'claude-opus-4-8';
 
@@ -160,8 +161,9 @@ export function estimateCost(fanout: RoutedModel[]): [number, number] {
 }
 
 /**
- * Deterministic fallback ranking — the highest-tier survivor takes the whole count.
- * Used when Gate 2's LLM call is unavailable or fails, so routing never dead-ends.
+ * Deterministic single pick — the best CROSS-VALIDATED fit takes the whole count (not "highest tier").
+ * Used when Gate 2's LLM call is unavailable, when only one model is asked for, so routing never
+ * dead-ends AND the single pick is still the right specialist for the class.
  */
 export function deterministicRoute(
   req: RoutingRequest,
@@ -169,64 +171,31 @@ export function deterministicRoute(
   dropped: DroppedModel[]
 ): RoutingDecision | null {
   if (survivors.length === 0) return null;
-  const best = [...survivors].sort((a, b) => b.tier - a.tier || b.strengths.prompt_adherence - a.strengths.prompt_adherence)[0];
+  const [best] = pickRoster(survivors, classifyRequest(req), 1);
   const primary: RoutedModel = {
-    modelId: best.id,
+    modelId: best.model.id,
     n: Math.max(1, req.count),
-    rationale: `Highest-tier model satisfying the request (${best.label}).`,
+    rationale: best.rationale,
+    score: best.fit.score,
   };
   return { primary, fanout: [primary], dropped, estCostUsd: estimateCost([primary]) };
 }
 
 /**
- * Score a model's FIT for THIS request — read live from the registry (self-maintaining), never a static
- * rating (photolif's fatal flaw). Grounded in the STRUCTURED request signals (editing / references /
- * needs) matched to the model's strengths + tier — not prompt NLP (that's the LLM ranker's job). This
- * is what makes the fan-out's auto pick "the top-N for what you actually asked," and it stays current
- * as the Model agent's refresh updates the registry.
+ * A model's FIT for THIS request — the cross-validated verdict (0..1), NOT a tier grab. Delegates to the
+ * roster engine: classify the request into the craft axes it needs, then score the model on axis
+ * alignment corroborated by its own capability tags (tier is only a weak prior). Kept as the public
+ * scoring entry point; the exact reasoning lives in `selection.ts`.
  */
 export function scoreModelForRequest(m: ImageModel, req: RoutingRequest): number {
-  let s = m.tier * 2 + m.strengths.prompt_adherence;
-  if (req.editing) s += m.strengths.editing;
-  if (req.references && req.references.length > 0) {
-    s += m.strengths.multimodal + (m.capabilities.includes('multi_reference') ? 2 : 0) + m.strengths.consistency;
-  }
-  for (const need of req.needs) if (m.capabilities.includes(need)) s += 1;
-  // Aspect is a soft preference (never a bench): a model that DOCUMENTS the requested ratio edges out
-  // one that doesn't — but both stay in the fan, so a portrait request still spreads across providers.
-  if (req.aspectRatio && m.aspectRatios.includes(req.aspectRatio)) s += 0.5;
-  return s;
+  return crossValidateFit(m, classifyRequest(req)).score;
 }
 
 /**
- * Pick the top-`want` models to fan across — scored by fit, then spread for PROVIDER DIVERSITY. Decision
- * closure needs DIFFERENT takes (GPT vs Gemini vs Flux), not three variants of one family — so the first
- * pass takes the best model per provider, then fills any remaining slots with the next-best overall.
- */
-export function pickFanout(survivors: ImageModel[], req: RoutingRequest, want: number): ImageModel[] {
-  const scored = survivors
-    .map((m) => ({ m, s: scoreModelForRequest(m, req) }))
-    .sort((a, b) => b.s - a.s);
-  const chosen: ImageModel[] = [];
-  const usedProviders = new Set<string>();
-  for (const { m } of scored) {
-    if (chosen.length >= want) break;
-    if (usedProviders.has(m.provider)) continue;
-    chosen.push(m);
-    usedProviders.add(m.provider);
-  }
-  for (const { m } of scored) {
-    if (chosen.length >= want) break;
-    if (!chosen.includes(m)) chosen.push(m);
-  }
-  return chosen;
-}
-
-/**
- * MULTI-MODEL fan-out: render across the top-`fanModels` models (by live fit score + provider
- * diversity), each producing `perModel` images — the N×M grid that gives decision closure. Autonomous
- * and self-maintaining (scores the current registry), never a static rating. Never dead-ends: fewer
- * survivors than asked just fans across what exists.
+ * MULTI-MODEL fan-out — the ROSTER: render across the top-`fanModels` models chosen by cross-validated
+ * fit AND spread for genuine diversity of approach (different specialists / cabinets), so the fan is real
+ * alternatives, not clones of the flagship. Autonomous + self-maintaining (reads researched strengths),
+ * never a static rating. Never dead-ends: fewer survivors than asked just fans across what exists.
  */
 export function deterministicFanout(
   req: RoutingRequest,
@@ -236,32 +205,52 @@ export function deterministicFanout(
   if (survivors.length === 0) return null;
   const want = Math.max(1, req.fanModels ?? 1);
   const per = Math.max(1, req.perModel ?? 1);
-  const fanout: RoutedModel[] = pickFanout(survivors, req, want).map((m) => ({
-    modelId: m.id,
+  const fanout: RoutedModel[] = pickRoster(survivors, classifyRequest(req), want).map((p) => ({
+    modelId: p.model.id,
     n: per,
-    rationale: `Fan-out pick — ${m.label} (tier ${m.tier}, best fit for this request).`,
-    score: scoreModelForRequest(m, req),
+    rationale: p.rationale,
+    score: p.fit.score,
   }));
   return { primary: fanout[0], fanout, dropped, estCostUsd: estimateCost(fanout) };
 }
 
 /* ── Gate 2 — LLM rank over survivors ──────────────────────────────────────── */
 
-const RANK_SYSTEM = `You are the routing oracle for an image-generation coordinator.
-You are given a user's creative intent and a catalog of candidate image models (each with a brief describing what it is best at). Choose the best model — or a small multi-model fan-out — to fulfil the request, and split the requested image COUNT across them.
+const RANK_SYSTEM = `You are the routing oracle for an image-generation coordinator — the Model agent's Orient step.
+You are given a user's creative intent, the CLASS PROFILE it was classified into (the craft axes it needs), and candidate models. Each candidate carries a pre-computed CROSS-VALIDATED fit (axis alignment · capability corroboration · a weak tier prior) plus what it is genuinely best at. Choose the model — or a small diverse fan-out — that is the right SPECIALIST for this class.
 
-Rules:
-- Prefer ONE model unless a spread genuinely serves the user (e.g. "show me different directions" → 2-3 diverse models).
+Reason like the roster, not the leaderboard:
+- Pick the genuine specialist for the CLASS. Do NOT default to the highest tier / flagship — a vector-logo request wants the vector/typography specialist even if a flagship generalist scores a high raw number.
+- Trust the cross-validation: prefer a candidate whose fit is CORROBORATED (axis strength AND a matching capability), over one riding a single high axis or tier alone.
+- If you fan across more than one, make them genuinely DIFFERENT approaches (different cabinets), not near-duplicates — that's what makes comparing them a real decision.
 - Assign each chosen model an integer n ≥ 1; the n values MUST sum to exactly the requested count.
 - Every chosen modelId MUST be one of the candidate ids. Never invent an id.
-- Give a one-sentence rationale per chosen model, grounded in its brief.
+- One-sentence rationale per pick, grounded in the class + its strengths (not "it's the best model").
 
 Respond with ONLY a JSON object, no prose:
 {"fanout":[{"modelId":"<id>","n":<int>,"rationale":"<one sentence>"}]}`;
 
-/** Build the candidate block the ranker reads. */
-function candidateBrief(m: ImageModel): string {
-  return `- ${m.id} | ${m.label} | tier ${m.tier} | $${m.costPerImageUsd[0]}-${m.costPerImageUsd[1]}/img | ${m.brief}`;
+/** Build the candidate block the ranker reads — grounded in the CROSS-VALIDATED fit (not tier alone),
+ *  so the LLM reasons over the same evidence the deterministic roster does. */
+function candidateBrief(m: ImageModel, req: RoutingRequest): string {
+  const fit = crossValidateFit(m, classifyRequest(req));
+  const axes = fit.topAxes.map((a) => a.replace(/_/g, ' ')).join(', ');
+  const corr = fit.confident ? 'corroborated' : 'uncorroborated';
+  return (
+    `- ${m.id} | ${m.label} | tier ${m.tier} | $${m.costPerImageUsd[0]}-${m.costPerImageUsd[1]}/img\n` +
+    `    fit ${Math.round(fit.score * 100)} (${corr}; strong on ${axes || 'general craft'}) | best for: ${m.bestFor.join(', ')}\n` +
+    `    ${m.brief}`
+  );
+}
+
+/** One-line summary of the request's classified craft profile — the axes it needs, heaviest first. */
+function describeProfile(req: RoutingRequest): string {
+  const p = classifyRequest(req);
+  const top = (Object.entries(p.weights) as [keyof typeof p.weights & string, number][])
+    .filter(([, w]) => w > 0.15)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, w]) => `${k.replace(/_/g, ' ')} ${w.toFixed(1)}`);
+  return top.join(', ') || 'general';
 }
 
 /**
@@ -310,7 +299,8 @@ export async function route(
             `INTENT: ${req.intent}\n` +
             `IMAGE COUNT: ${req.count}\n` +
             (req.aspectRatio ? `ASPECT: ${req.aspectRatio}\n` : '') +
-            `\nCANDIDATES:\n${survivors.map(candidateBrief).join('\n')}`,
+            `CLASS PROFILE (axes it needs): ${describeProfile(req)}\n` +
+            `\nCANDIDATES:\n${survivors.map((m) => candidateBrief(m, req)).join('\n')}`,
         },
       ],
     };
