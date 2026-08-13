@@ -281,7 +281,7 @@ export function ImageStage({ images, generating, medium, contextLabel, onSaveAss
                     <div className="pxc-stage-group-head">
                       {g.items[0]?.img.score != null && <span className="pxc-stage-score" title="Model agent's fit rank for this prompt">#{ri + 1}</span>}
                       <span className="pxc-stage-model">{g.label}</span>
-                      <span className="pxc-stage-count">{g.items.length}</span>
+                      {g.items.length > 1 && <span className="pxc-stage-count" title="Images from this model">{g.items.length}</span>}
                     </div>
                     {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
                   </div>
