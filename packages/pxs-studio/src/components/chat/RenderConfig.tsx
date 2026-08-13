@@ -59,8 +59,12 @@ const CSS = `
   color: var(--a2ui-text-secondary); font-family: inherit; font-size: var(--a2ui-text-sm); text-align: left; cursor: pointer;
   border-radius: var(--a2ui-radius-md); transition: background var(--a2ui-transition-fast), color var(--a2ui-transition-fast); }
 .rc-model:hover:not(:disabled) { background: var(--a2ui-bg-hover); color: var(--a2ui-text-primary); }
-.rc-model[data-on="true"] { color: var(--a2ui-text-primary); }
-.rc-model:disabled { opacity: 0.4; cursor: default; }
+.rc-model[data-on="true"] { color: var(--a2ui-text-primary); background: var(--a2ui-accent-subtle); }
+.rc-model[data-on="true"] .rc-check { color: var(--pxs-accent-text); }
+.rc-model:disabled { cursor: default; }
+/* capped = selected but beyond the count → dim, keep the check so you see it's still in your set */
+.rc-model[data-capped="true"] { opacity: 0.45; }
+.rc-model:disabled:not([data-capped="true"]) { opacity: 0.4; }
 .rc-check { width: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--a2ui-accent); flex-shrink: 0; }
 .rc-model-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-model-off { flex-shrink: 0; font-size: 10px; color: var(--a2ui-text-tertiary); }
@@ -88,13 +92,15 @@ export function RenderConfig() {
   const [models, setModels] = useState<ModelOpt[]>([]);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Load the catalog on MOUNT (not just on open) so the trigger summary + Auto preview are correct
+  // before the popover is ever opened.
   useEffect(() => {
-    if (!open || models.length > 0) return;
+    if (models.length > 0) return;
     fetch('/api/models/list')
       .then((r) => r.json())
       .then((d) => setModels(Array.isArray(d.models) ? d.models : []))
       .catch(() => {});
-  }, [open, models.length]);
+  }, [models.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -110,16 +116,64 @@ export function RenderConfig() {
     };
   }, [open]);
 
-  const modelsLabel =
-    fanConfig.mode === 'manual'
-      ? `${fanConfig.models.length || 0} model${fanConfig.models.length === 1 ? '' : 's'}`
-      : `Auto · top ${fanConfig.fanModels}`;
-  const summary = `${modelsLabel} · ${fanConfig.perModel}/ea · ${fanConfig.aspect ?? 'auto'}`;
-
-  const toggleModel = (id: string) => {
-    const has = fanConfig.models.includes(id);
-    setFanConfig({ models: has ? fanConfig.models.filter((m) => m !== id) : [...fanConfig.models, id] });
+  // RANK — ready models first, then by tier (desc), stable on registry order. This is the fit order the
+  // AUTO fan pre-selects from and the order everything sorts by (so selections stay rank-ordered).
+  const ranked = [...models].sort((a, b) => Number(b.ready) - Number(a.ready) || b.tier - a.tier);
+  const readyRanked = ranked.filter((m) => m.ready);
+  const rankIndex = (id: string) => {
+    const i = ranked.findIndex((m) => m.id === id);
+    return i < 0 ? 999 : i;
   };
+  const byRank = (ids: string[]) => [...ids].sort((a, b) => rankIndex(a) - rankIndex(b));
+  const labelOf = (id: string) => models.find((m) => m.id === id)?.label ?? id;
+
+  const count = Math.max(1, fanConfig.fanModels);
+  const maxCount = Math.max(1, readyRanked.length || 5);
+
+  // THE SELECTION — one concrete, ordered list, whatever the mode:
+  //  • AUTO   → a live PREVIEW of the top-`count` ready models (not frozen — untouched Auto still lets
+  //             the Model agent pick per-request at render; this just shows what it'll likely choose).
+  //  • MANUAL → exactly what the user curated (persisted). Editing ANY model flips Auto → Manual and
+  //             seeds the current preview so nothing is lost.
+  const selected =
+    fanConfig.mode === 'manual'
+      ? byRank(fanConfig.models.filter((id) => models.some((m) => m.id === id)))
+      : readyRanked.slice(0, count).map((m) => m.id);
+  const active = selected.slice(0, count); // the models that actually render; the rest are capped/disabled
+
+  // Before the catalog loads, fall back to the raw count so the trigger never flashes "0 models".
+  const shownCount = active.length || (models.length === 0 ? count : 0);
+  const summary = `${fanConfig.mode === 'auto' ? 'Auto' : 'Manual'} · ${shownCount} model${shownCount === 1 ? '' : 's'} · ${fanConfig.perModel}/ea · ${fanConfig.aspect ?? 'auto'}`;
+
+  // Toggling a model always lands in MANUAL with a concrete list; count follows the selection size so
+  // selecting adds (+1) and deselecting removes (−1) — never below 1.
+  const toggleModel = (id: string) => {
+    const base = selected; // the current concrete list (auto preview or manual)
+    const has = base.includes(id);
+    if (has && base.length <= 1) return; // keep at least one
+    const next = byRank(has ? base.filter((m) => m !== id) : [...base, id]);
+    setFanConfig({ mode: 'manual', models: next, fanModels: Math.max(1, next.length) });
+  };
+
+  // The COUNT dropdown/steppers: in Auto it just resizes the preview (stays autonomous). In Manual it
+  // caps the active window (extra selections DISABLE, not deleted) or AUTO-FILLS from the next-best.
+  const setCount = (c: number) => {
+    const next = Math.max(1, Math.min(maxCount, c));
+    if (fanConfig.mode === 'auto') {
+      setFanConfig({ fanModels: next });
+      return;
+    }
+    if (next > fanConfig.models.length) {
+      const fill = readyRanked.map((m) => m.id).filter((id) => !fanConfig.models.includes(id));
+      const grown = byRank([...fanConfig.models, ...fill.slice(0, next - fanConfig.models.length)]);
+      setFanConfig({ models: grown, fanModels: next });
+    } else {
+      setFanConfig({ fanModels: next }); // cap — selected list unchanged, overflow disables
+    }
+  };
+
+  const toAuto = () => setFanConfig({ mode: 'auto', models: [] });
+  const toManual = () => setFanConfig({ mode: 'manual', models: selected, fanModels: Math.max(1, active.length) });
 
   return (
     <div className="rc" ref={ref}>
@@ -137,7 +191,7 @@ export function RenderConfig() {
             <SegmentedControl
               label="Fan mode"
               value={fanConfig.mode}
-              onChange={(m) => setFanConfig({ mode: m as 'auto' | 'manual' })}
+              onChange={(m) => (m === 'auto' ? toAuto() : toManual())}
               options={[
                 { value: 'auto', label: 'Auto', icon: <span>Auto</span> },
                 { value: 'manual', label: 'Manual', icon: <span>Manual</span> },
@@ -145,26 +199,42 @@ export function RenderConfig() {
             />
           </div>
 
-          {fanConfig.mode === 'auto' ? (
-            <div className="rc-row">
-              <span className="rc-lbl">How many</span>
-              <Stepper value={fanConfig.fanModels} min={1} max={5} onChange={(n) => setFanConfig({ fanModels: n })} />
-            </div>
-          ) : (
-            <div className="rc-models">
-              {models.length === 0 ? (
-                <span className="rc-note">Loading models…</span>
-              ) : (
-                models.map((m) => (
-                  <button key={m.id} type="button" className="rc-model" data-on={fanConfig.models.includes(m.id)} disabled={!m.ready} onClick={() => toggleModel(m.id)}>
-                    <span className="rc-check">{fanConfig.models.includes(m.id) && <Icon name="check" size={12} />}</span>
+          <div className="rc-row">
+            <span className="rc-lbl">How many</span>
+            <Stepper value={count} min={1} max={maxCount} onChange={setCount} />
+          </div>
+
+          {/* The MODEL LIST — shown in BOTH modes. Auto pre-selects (checked); editing any row flips to
+              Manual and persists. Selections beyond "How many" show CAPPED (checked but disabled) — they
+              come back when you raise the count. No-key models are disabled. */}
+          <div className="rc-models">
+            {models.length === 0 ? (
+              <span className="rc-note">Loading models…</span>
+            ) : (
+              ranked.map((m) => {
+                const isSelected = selected.includes(m.id);
+                const isActive = active.includes(m.id);
+                const capped = isSelected && !isActive;
+                const disabled = !m.ready || capped;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className="rc-model"
+                    data-on={isActive}
+                    data-capped={capped}
+                    disabled={disabled}
+                    onClick={() => toggleModel(m.id)}
+                    title={capped ? 'Beyond “How many” — raise the count to include it' : undefined}
+                  >
+                    <span className="rc-check">{isSelected && <Icon name="check" size={12} />}</span>
                     <span className="rc-model-name">{m.label}</span>
-                    {!m.ready && <span className="rc-model-off">no key</span>}
+                    {!m.ready ? <span className="rc-model-off">no key</span> : capped ? <span className="rc-model-off">capped</span> : null}
                   </button>
-                ))
-              )}
-            </div>
-          )}
+                );
+              })
+            )}
+          </div>
 
           <div className="rc-row">
             <span className="rc-lbl">Images each</span>

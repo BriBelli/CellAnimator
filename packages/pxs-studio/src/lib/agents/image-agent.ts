@@ -306,7 +306,12 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   // Fan-out controls from the picker (else the auto default). Manual mode → `models` drives the fan;
   // auto → top-N by fit. `aspect` sets the render AND the reference aspect-fit target for this render.
   const fanCfg = turn.fan;
-  const manualModels = fanCfg?.mode === 'manual' && fanCfg.models && fanCfg.models.length > 0 ? fanCfg.models : undefined;
+  // MANUAL = render EXACTLY the active window the picker showed (selected, capped to "how many") — WYSIWYG.
+  // AUTO = the Model agent picks the top-N per request (autonomous); the picker only previewed it.
+  const manualModels =
+    fanCfg?.mode === 'manual' && fanCfg.models && fanCfg.models.length > 0
+      ? fanCfg.models.slice(0, Math.max(1, fanCfg.fanModels ?? fanCfg.models.length))
+      : undefined;
   const fanModelsN = manualModels ? undefined : Math.max(1, fanCfg?.fanModels ?? FANOUT_DEFAULT_MODELS);
   const perModelN = Math.max(1, fanCfg?.perModel ?? FANOUT_DEFAULT_PER_MODEL);
   const fanAspect = fanCfg?.aspect;
