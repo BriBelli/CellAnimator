@@ -323,19 +323,19 @@ export async function POST(req: Request) {
           const result = parseClassifyResult(JSON.stringify(toolUse.input ?? {}));
           send({ type: 'step', id: 'choosing', status: 'done' });
 
-          // INTENT-DRIVEN TRANSFER (never auto-render): setting the medium to Image/Video means "take me
-          // to the specialist for this" — so we ALWAYS transfer to it, but land GUIDED: the specialist
-          // opens the Prompt Builder in the IDE, confirms the prompt + references WITH the user, and does
-          // NOT spend on a render. Rendering is an explicit act in the workspace (the Render button, or an
-          // explicit "generate these" follow-up). Brian's line: "I wouldn't expect images generated there
-          // [the chat] — the image model should work with me unless I literally say create me these."
+          // INTENT-DRIVEN TRANSFER: setting the medium to Image/Video means "take me to the specialist
+          // for this" — so we reliably transfer to it. But DEPTH is the Operator's JUDGMENT, not a
+          // hardcode: it reads output variance (see the operator skill). A from-scratch generation has
+          // many valid outputs → 'guided' (the builder shapes it, no surprise render). A simple
+          // single-output edit ("make the car red") has ONE output → 'quick' (just do it). We honor the
+          // verdict's depth and only default to guided when it didn't decide — never force either way.
           if ((section === 'image' || section === 'video') && prompt.trim().length > 0) {
             result.action = 'transfer';
             result.frame = {
               goal: result.frame?.goal || prompt.slice(0, 200),
               subject: result.frame?.subject,
               medium: section === 'video' ? 'video' : 'image',
-              depth: 'guided',
+              depth: result.frame?.depth ?? 'guided',
             };
           }
 
