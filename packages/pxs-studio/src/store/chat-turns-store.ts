@@ -136,10 +136,34 @@ export function a2uiSurface(block: A2UIBlock): A2UISurface {
 /** One generated image tile streamed into the turn (the dispatched image workflow's output). */
 export interface GalleryImage {
   url: string;
+  /** Registry model id — pairs the tile with its fan entry (label is display-only). */
+  modelId?: string;
   modelLabel: string;
   index: number;
   /** The fan-out fit score the model was picked by (higher = better fit for this request). */
   score?: number;
+}
+
+/**
+ * One model's LIVE status inside a fan-out render — the client's view of the per-model lifecycle
+ * (`gen_plan` seeds it; `fan_model` + `image` events advance it). 'pending' = planned, API call not
+ * yet dispatched; 'running' = the adapter is on the wire; 'done'/'failed' = settled. A failed model
+ * NEVER fails the turn — the rest of the fan keeps streaming (graceful specialist).
+ */
+export interface FanModelStatus {
+  modelId: string;
+  label: string;
+  /** Images this model was asked for. */
+  n: number;
+  /** Images landed so far (== n when done). */
+  delivered: number;
+  state: 'pending' | 'running' | 'done' | 'failed';
+  /** Failure reason (adapter taxonomy or message) — only on 'failed'. */
+  reason?: string;
+  /** The selection rationale this model was picked by. */
+  why?: string;
+  /** Wall-clock ms from dispatch to settle — set on 'done'. */
+  ms?: number;
 }
 
 export type ChatTurnStatus = 'thinking' | 'streaming' | 'done' | 'error';
@@ -160,9 +184,11 @@ export interface ChatTurn {
   images: GalleryImage[];
   /** True while a dispatched image workflow is generating (drives the gallery loading state). */
   generating?: boolean;
-  /** The fan PLAN for this render — the models routing chose (label + images each), set the instant
-   *  routing resolves so the stage shows ALL N loaders at once. Cleared on gen_done. */
-  genPlan?: { label: string; n: number }[];
+  /** The fan's per-model status — seeded by `gen_plan` the instant routing resolves (ALL N models
+   *  paint at once) and advanced live by `fan_model` + `image` events. NOT cleared on gen_done: the
+   *  settled fan is the run's record (the status panel), and it rehydrates from the persisted
+   *  interaction on reload. Plan order = the agent's ranking. */
+  fan?: FanModelStatus[];
   /** Gentle non-blocking notices from the coordinator (best-effort shortfalls) — shown muted. */
   notices?: string[];
   /** Set when the Operator TRANSFERRED this turn to a specialist (large workflow) — attributes the
@@ -432,10 +458,48 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
           } else if (evt.type === 'gen_start') {
             patch(id, { generating: true });
           } else if (evt.type === 'gen_plan') {
-            // Routing resolved — the fan is known. Record it so the stage paints ALL N model loaders now.
-            patch(id, { generating: true, genPlan: Array.isArray(evt.models) ? evt.models : [] });
+            // Routing resolved — the fan is known. Seed one status entry per model (plan order =
+            // the agent's ranking) so the stage paints ALL N model loaders now.
+            const models = Array.isArray(evt.models) ? evt.models : [];
+            patch(id, {
+              generating: true,
+              fan: models.map((m: { modelId?: string; label?: string; n?: number; why?: string }) => ({
+                modelId: String(m.modelId ?? m.label ?? ''),
+                label: String(m.label ?? m.modelId ?? 'Model'),
+                n: Math.max(1, Number(m.n) || 1),
+                delivered: 0,
+                state: 'pending' as const,
+                why: typeof m.why === 'string' && m.why ? m.why : undefined,
+              })),
+            });
+          } else if (evt.type === 'fan_model') {
+            // One model's lifecycle advanced (running → done | failed). PER-MODEL only: a failed
+            // model never touches the turn's generating/error — the rest of the fan keeps streaming.
+            set((s) => ({
+              turns: s.turns.map((t) => {
+                if (t.id !== id || !t.fan) return t;
+                return {
+                  ...t,
+                  fan: t.fan.map((f) => {
+                    if (f.modelId !== evt.modelId) return f;
+                    if (evt.state === 'running') return { ...f, state: 'running' as const };
+                    if (evt.state === 'done')
+                      return {
+                        ...f,
+                        state: 'done' as const,
+                        delivered: typeof evt.delivered === 'number' ? evt.delivered : f.delivered,
+                        ms: typeof evt.ms === 'number' ? evt.ms : undefined,
+                      };
+                    if (evt.state === 'failed')
+                      return { ...f, state: 'failed' as const, reason: typeof evt.reason === 'string' ? evt.reason : undefined };
+                    return f;
+                  }),
+                };
+              }),
+            }));
           } else if (evt.type === 'image') {
-            // A generated tile arrived — append it (streamed gallery).
+            // A generated tile arrived — append it (streamed gallery) + tick its model's delivered
+            // count (matched by id, label as the fallback for older streams).
             set((s) => ({
               turns: s.turns.map((t) =>
                 t.id === id
@@ -443,14 +507,38 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                       ...t,
                       images: [
                         ...t.images,
-                        { url: evt.url, modelLabel: evt.modelLabel || '', index: t.images.length, score: evt.score },
+                        { url: evt.url, modelId: evt.modelId, modelLabel: evt.modelLabel || '', index: t.images.length, score: evt.score },
                       ],
+                      fan: t.fan?.map((f) =>
+                        (evt.modelId ? f.modelId === evt.modelId : f.label === evt.modelLabel)
+                          ? { ...f, delivered: f.delivered + 1 }
+                          : f
+                      ),
                     }
                   : t
               ),
             }));
           } else if (evt.type === 'gen_done') {
-            patch(id, { generating: false, genPlan: undefined });
+            // The whole fan settled. KEEP `fan` — the settled statuses are the run's record (the
+            // status panel); only the generating flag drops. Belt-and-braces: anything still marked
+            // pending/running at gen_done settles honestly (delivered==n → done, else failed).
+            set((s) => ({
+              turns: s.turns.map((t) =>
+                t.id === id
+                  ? {
+                      ...t,
+                      generating: false,
+                      fan: t.fan?.map((f) =>
+                        f.state === 'pending' || f.state === 'running'
+                          ? f.delivered >= f.n
+                            ? { ...f, state: 'done' as const }
+                            : { ...f, state: 'failed' as const, reason: f.reason ?? 'no result' }
+                          : f
+                      ),
+                    }
+                  : t
+              ),
+            }));
           } else if (evt.type === 'notice') {
             // Gentle best-effort heads-up (not an error) — append to the turn's notices.
             set((s) => ({
@@ -602,6 +690,22 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
         const turns: ChatTurn[] = interactions.map((it) => {
           const a2ui = it.response?.a2ui as A2UIBlock | null;
           const persistedSources = (it.response as { sources?: Source[] } | undefined)?.sources;
+          // Rehydrate the fan's per-model record (snake_case summary → the live status shape) so the
+          // status panel repaints the run — the 360° round-trip: nothing about the run is lost.
+          const persistedFan = Array.isArray(it.response?.fan)
+            ? it.response.fan.map(
+                (f): FanModelStatus => ({
+                  modelId: f.model_id,
+                  label: f.label,
+                  n: f.n,
+                  delivered: f.delivered,
+                  state: f.state,
+                  reason: f.reason,
+                  why: f.why,
+                  ms: f.ms,
+                })
+              )
+            : undefined;
           return {
             id: it.id,
             userPrompt: it.prompt?.text ?? '',
@@ -621,6 +725,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
             sources: Array.isArray(persistedSources) ? persistedSources : [],
             images: imagesByInteraction.get(it.id) ?? [],
             userImages: (userImagesByInteraction.get(it.id) ?? []).map((u) => u.url),
+            fan: persistedFan,
             createdAt: it.created_at,
             interactionId: it.id,
           };

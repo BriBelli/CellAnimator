@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
+import { createFanRecorder, runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { refreshRegistryIfDue } from '../../../lib/agents/model-refresh-runner';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
@@ -198,6 +198,9 @@ export async function POST(req: Request) {
       // Accumulate generated tiles so they can be PERSISTED as assets (Slice 1 — they used to be
       // forwarded and then lost on reload). Mirrors how emittedBlock captures the a2ui.
       const generatedImages: { url: string; modelLabel: string; index: number }[] = [];
+      // The fan's per-model record (plan · delivered · settled state) — persisted on the interaction
+      // so a reloaded thread repaints the fan status panel.
+      const fanRecorder = createFanRecorder();
       let emittedBlock:
         | { kind: 'references'; modelLabel: string; maxReferences: number; supports: string[]; recommend: string[]; note?: string }
         | { kind: 'builder'; surface?: 'canvas'; title: string; media: 'image' | 'video' | 'pixel' | 'anim'; parts: { id: string; label: string; guidance: string; value: string; recommend?: string; chips: string[]; weight?: number }[]; modelId?: string; assembly?: string; model?: { label: string; maxReferences: number; supports: string[] } }
@@ -219,6 +222,7 @@ export async function POST(req: Request) {
         };
 
         for await (const ev of runImageAgent(frame, { userMessage: prompt, history, references, builder, fan: body.fan })) {
+          fanRecorder.observe(ev);
           if (ev.type === 'agent_usage') {
             agentInTok += ev.inputTokens;
             agentOutTok += ev.outputTokens;
@@ -243,6 +247,7 @@ export async function POST(req: Request) {
 
         // ── PERSIST + METER (best-effort; never breaks the stream) ──
         try {
+          const fan = fanRecorder.summary();
           await db.update('interaction', interactionId, {
             prompt: { text: prompt },
             response: {
@@ -250,6 +255,8 @@ export async function POST(req: Request) {
               tokens_used: agentOutTok,
               a2ui: emittedBlock,
               a2ui_version: A2UI_VERSION,
+              // The fan's per-model record — how a reload repaints the run's status panel.
+              ...(fan.length > 0 ? { fan } : {}),
             },
           } as Partial<Interaction>);
           await recordUsage(db, {

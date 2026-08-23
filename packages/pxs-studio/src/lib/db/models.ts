@@ -83,6 +83,27 @@ export interface Thread extends BaseRecord {
   seeded_from?: { kind: 'asset' | 'recipe'; id: string };
 }
 
+/**
+ * One model's settled record in a fan-out render — the run's per-model receipt (what was asked,
+ * what landed, how it ended, why it was picked). Persisted on the interaction so a reloaded thread
+ * repaints the fan status panel — the record of the run, not just its images (360° round-trip).
+ */
+export interface FanModelSummary {
+  model_id: string;
+  label: string;
+  /** Images this model was asked for. */
+  n: number;
+  /** Images it actually landed. */
+  delivered: number;
+  state: 'done' | 'failed';
+  /** Failure reason (adapter taxonomy or message) — only on 'failed'. */
+  reason?: string;
+  /** The selection rationale this model was picked by. */
+  why?: string;
+  /** Wall-clock ms from dispatch to settle. */
+  ms?: number;
+}
+
 /** One user↔assistant exchange within a thread. */
 export interface Interaction extends BaseRecord {
   category: 'interaction';
@@ -101,6 +122,8 @@ export interface Interaction extends BaseRecord {
     a2ui: unknown | null;
     /** Stamped from {@link A2UI_VERSION} on every stored a2ui snapshot (Decision 4). */
     a2ui_version: string;
+    /** The fan-out's per-model summary — present when this turn ran a render. */
+    fan?: FanModelSummary[];
   };
   /** The Prompt entity this interaction was launched from (recipe-IP; Decision 2). */
   source_prompt_id?: string;

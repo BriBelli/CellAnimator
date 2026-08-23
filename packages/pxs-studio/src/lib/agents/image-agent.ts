@@ -15,6 +15,7 @@ import { coordinateImage } from '../engine/coordinator';
 import { type Capability, type PromptFormula } from '../engine/model-registry';
 import type { RoutingRequest } from '../engine/routing';
 import { describeModelCapabilitiesOrDefault, type ModelCapabilityFacts } from './model-agent';
+import type { FanModelSummary } from '../db';
 import { imageAgentSkills } from './skills';
 import { assertFrameBudget, type EpistemicFrame } from './epistemic-frame';
 
@@ -196,14 +197,102 @@ export type ImageAgentEvent =
   /** THE COUPLING: the agent edited a Build part from a natural-language instruction (no render). */
   | { type: 'part_edit'; id: string; value: string }
   | { type: 'gen_start' }
-  /** The fan PLAN — the models about to render (label + how many each), emitted the instant routing
-   *  resolves so the stage can show ALL N loaders at once (you see every model is cooking, not one). */
-  | { type: 'gen_plan'; models: { label: string; n: number }[] }
-  | { type: 'image'; url: string; modelLabel: string; index: number; score?: number }
+  /** The fan PLAN — the models about to render (id + label + how many each + the pick's "why"),
+   *  emitted the instant routing resolves so the stage can show ALL N loaders at once (you see every
+   *  model is cooking, not one) and the chat can explain each pick. */
+  | { type: 'gen_plan'; models: { modelId: string; label: string; n: number; why?: string }[] }
+  /** One model's live lifecycle inside the fan — running → done | failed. A failed model NEVER fails
+   *  the turn (graceful specialist): the rest of the fan keeps streaming; the UI shows the state. */
+  | { type: 'fan_model'; modelId: string; state: 'running' | 'done' | 'failed'; delivered?: number; ms?: number; reason?: string }
+  | { type: 'image'; url: string; modelId?: string; modelLabel: string; index: number; score?: number }
   | { type: 'gen_error'; message: string }
   /** A gentle non-blocking heads-up (best-effort shortfall) — forwarded from the coordinator. */
   | { type: 'gen_notice'; message: string }
   | { type: 'gen_done'; costUsd: number };
+
+/**
+ * Fan RECORDER — reduces the agent's event stream into the persistable per-model summary
+ * ({@link FanModelSummary}[]). Both API routes feed it every event and persist `summary()` on the
+ * interaction, so a reloaded thread repaints the fan status panel from the run's true record.
+ * A model still marked running at the end (stream cut) settles as 'failed' — never a phantom.
+ */
+export function createFanRecorder() {
+  const order: string[] = [];
+  const byId = new Map<string, FanModelSummary & { settled: boolean }>();
+  return {
+    observe(ev: ImageAgentEvent): void {
+      if (ev.type === 'gen_plan') {
+        for (const m of ev.models) {
+          if (byId.has(m.modelId)) continue;
+          order.push(m.modelId);
+          byId.set(m.modelId, { model_id: m.modelId, label: m.label, n: m.n, delivered: 0, state: 'done', why: m.why, settled: false });
+        }
+      } else if (ev.type === 'image' && ev.modelId) {
+        const r = byId.get(ev.modelId);
+        if (r) r.delivered += 1;
+      } else if (ev.type === 'fan_model') {
+        const r = byId.get(ev.modelId);
+        if (!r) return;
+        if (ev.state === 'done') {
+          r.state = 'done';
+          r.settled = true;
+          if (typeof ev.delivered === 'number') r.delivered = ev.delivered;
+          r.ms = ev.ms;
+        } else if (ev.state === 'failed') {
+          r.state = 'failed';
+          r.settled = true;
+          r.reason = ev.reason;
+        }
+      }
+    },
+    /** The persistable summary (empty when the turn never rendered). */
+    summary(): FanModelSummary[] {
+      return order.map((id) => {
+        const { settled, ...r } = byId.get(id)!;
+        return settled ? r : { ...r, state: 'failed' as const, reason: r.reason ?? 'stream interrupted' };
+      });
+    },
+  };
+}
+
+/**
+ * Translate the coordinator's stream into agent events — the ONE translation both render legs share.
+ * Per-model failures stay PER-MODEL (`fan_model` failed): the rest of the fan keeps streaming and the
+ * turn still succeeds (graceful specialist). Only a TOTAL failure — routing found nothing, the budget
+ * gate refused, or zero images landed — becomes a turn-level `gen_error`.
+ */
+async function* streamFan(req: RoutingRequest, budgetUsd?: number): AsyncIterable<ImageAgentEvent> {
+  let cost = 0;
+  let scoreByModel: Record<string, number> = {};
+  for await (const ev of coordinateImage(req, { maxCostUsd: budgetUsd })) {
+    if (ev.type === 'routed') {
+      scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
+      yield { type: 'gen_plan', models: ev.models };
+    } else if (ev.type === 'model_start') {
+      yield { type: 'fan_model', modelId: ev.modelId, state: 'running' };
+    } else if (ev.type === 'tile') {
+      yield {
+        type: 'image',
+        url: ev.tile.image.url,
+        modelId: ev.tile.modelId,
+        modelLabel: ev.tile.modelLabel,
+        index: ev.totalSoFar - 1,
+        score: scoreByModel[ev.tile.modelId],
+      };
+    } else if (ev.type === 'model_done') {
+      yield { type: 'fan_model', modelId: ev.modelId, state: 'done', delivered: ev.delivered, ms: ev.ms };
+    } else if (ev.type === 'model_error') {
+      yield { type: 'fan_model', modelId: ev.modelId, state: 'failed', reason: ev.reason };
+    } else if (ev.type === 'notice') {
+      yield { type: 'gen_notice', message: ev.message };
+    } else if (ev.type === 'error') {
+      yield { type: 'gen_error', message: ev.message };
+    } else if (ev.type === 'done') {
+      cost = ev.costUsd;
+    }
+  }
+  yield { type: 'gen_done', costUsd: cost };
+}
 
 /** Build the grounded capability highlights list from the Model agent's facts. Typed per-role
  *  limits (Gemini-3-style) render as "up to 6 object · 5 character · 3 style"; otherwise the flat pool. */
@@ -449,23 +538,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     yield { type: 'step', id: 'selecting', label: 'Selecting the model…', status: 'start' };
     yield { type: 'step', id: 'selecting', status: 'done' };
     yield { type: 'gen_start' };
-    let cost = 0;
-    let scoreByModel: Record<string, number> = {};
-    for await (const ev of coordinateImage(req, { maxCostUsd: frame.budgetUsd })) {
-      if (ev.type === 'routed') {
-        scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
-        yield { type: 'gen_plan', models: ev.models };
-      } else if (ev.type === 'tile') {
-        yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1, score: scoreByModel[ev.tile.modelId] };
-      } else if (ev.type === 'done') {
-        cost = ev.costUsd;
-      } else if (ev.type === 'notice') {
-        yield { type: 'gen_notice', message: ev.message };
-      } else if (ev.type === 'error' || ev.type === 'model_error') {
-        yield { type: 'gen_error', message: 'message' in ev ? ev.message : `model error: ${ev.reason}` };
-      }
-    }
-    yield { type: 'gen_done', costUsd: cost };
+    yield* streamFan(req, frame.budgetUsd);
     return;
   }
 
@@ -604,20 +677,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
   yield { type: 'step', id: 'selecting', label: 'Selecting the model…', status: 'start' };
   yield { type: 'step', id: 'selecting', status: 'done' };
   yield { type: 'gen_start' };
-  let cost = 0;
-  let scoreByModel: Record<string, number> = {};
-  for await (const ev of coordinateImage(req, { maxCostUsd: frame.budgetUsd })) {
-    if (ev.type === 'routed') {
-      scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
-    } else if (ev.type === 'tile') {
-      yield { type: 'image', url: ev.tile.image.url, modelLabel: ev.tile.modelLabel, index: ev.totalSoFar - 1, score: scoreByModel[ev.tile.modelId] };
-    } else if (ev.type === 'done') {
-      cost = ev.costUsd;
-    } else if (ev.type === 'notice') {
-      yield { type: 'gen_notice', message: ev.message };
-    } else if (ev.type === 'error' || ev.type === 'model_error') {
-      yield { type: 'gen_error', message: 'message' in ev ? ev.message : `model error: ${ev.reason}` };
-    }
-  }
-  yield { type: 'gen_done', costUsd: cost };
+  // (This leg used to skip gen_plan entirely — the stage sat blank until the first tile. streamFan
+  // emits the plan + per-model lifecycle for BOTH legs now.)
+  yield* streamFan(req, frame.budgetUsd);
 }

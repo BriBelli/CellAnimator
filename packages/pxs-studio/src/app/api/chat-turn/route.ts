@@ -5,7 +5,7 @@ import {
   parseClassifyResult,
   STUB_SUGGESTIONS,
 } from '../../../lib/chat-classify';
-import { runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
+import { createFanRecorder, runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { operatorSkills } from '../../../lib/agents/skills';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
@@ -314,6 +314,8 @@ export async function POST(req: Request) {
         let agentOutTok = 0;
         // Generated tiles from a 'quick' transfer render — persisted as assets (Slice 1).
         const generatedImages: { url: string; modelLabel: string; index: number }[] = [];
+        // The fan's per-model record — persisted on the interaction for the status panel's reload.
+        const fanRecorder = createFanRecorder();
 
         try {
           // The verdict is the `decide` tool call from the ONE Operator stream above.
@@ -382,6 +384,7 @@ export async function POST(req: Request) {
               fan: body.fan,
             };
             for await (const ev of runImageAgent(frame, agentTurn)) {
+              fanRecorder.observe(ev);
               if (ev.type === 'agent_usage') {
                 agentInTok += ev.inputTokens;
                 agentOutTok += ev.outputTokens;
@@ -434,6 +437,7 @@ export async function POST(req: Request) {
 
           // Attribute tokens to their side of the exchange: INPUT tokens belong to the prompt,
           // OUTPUT tokens to the response. recordUsage still meters both (no double-count).
+          const fan = fanRecorder.summary();
           await db.update('interaction', interactionId, {
             prompt: { text: prompt, tokens: inputTokens },
             response: {
@@ -442,6 +446,8 @@ export async function POST(req: Request) {
               // Persist the A2UI block actually emitted (the question/builder, or null).
               a2ui: emittedBlock,
               a2ui_version: A2UI_VERSION,
+              // The fan's per-model record (quick-transfer renders) — repaints the panel on reload.
+              ...(fan.length > 0 ? { fan } : {}),
             },
           } as Partial<Interaction>);
           // Meter EVERYTHING this turn spent: the Operator call + the Image agent's brain (transfer

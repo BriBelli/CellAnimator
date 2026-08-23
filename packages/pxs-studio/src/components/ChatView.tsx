@@ -213,9 +213,9 @@ export default function ChatView({ initialPrompt }: Props) {
     .reverse()
     .flatMap((t) => t.images.map((img) => ({ ...img, turnId: t.id })));
   const generating = turns.some((t) => t.generating);
-  // The active render's fan plan (models + images each) — drives the stage's per-model loaders so ALL
+  // The active render's fan (per-model live status) — drives the stage's per-model loaders so ALL
   // N show at once, not a single ambiguous spinner.
-  const genPlan = turns.find((t) => t.generating)?.genPlan ?? [];
+  const genFan = turns.find((t) => t.generating)?.fan ?? [];
 
   const openWorkflow = useCallback(
     (medium: 'image' | 'video') => setActiveMedium(medium),
@@ -492,7 +492,7 @@ export default function ChatView({ initialPrompt }: Props) {
               images={stageImages}
               onSaveAsset={onSaveAsset}
               generating={generating}
-              genPlan={genPlan}
+              genPlan={genFan}
               medium={workspaceMedium}
               contextLabel={activeFrame?.subject || activeFrame?.goal}
             />

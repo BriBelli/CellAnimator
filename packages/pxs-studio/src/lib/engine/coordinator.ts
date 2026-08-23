@@ -26,9 +26,11 @@ export interface GalleryTile {
 
 /** Events the coordinator streams while curating + running the workflow. */
 export type CoordEvent =
-  | { type: 'routed'; decision: RoutingDecision; models: { label: string; n: number }[] }
+  | { type: 'routed'; decision: RoutingDecision; models: { modelId: string; label: string; n: number; why?: string }[] }
   | { type: 'model_start'; modelId: string; modelLabel: string; n: number }
   | { type: 'tile'; tile: GalleryTile; totalSoFar: number }
+  /** One model's adapter stream settled cleanly — its per-model lifecycle record (delivered + wall ms). */
+  | { type: 'model_done'; modelId: string; delivered: number; ms: number }
   | { type: 'model_error'; modelId: string; reason: string }
   /** A gentle, non-blocking heads-up (best-effort specialist): we delivered less than the ask
    *  (a model capped the batch, one failed, budget trimmed). Never an error — the run still succeeds. */
@@ -68,7 +70,13 @@ export async function* coordinateImage(
   yield {
     type: 'routed',
     decision,
-    models: decision.fanout.map((r) => ({ label: getModel(r.modelId)?.label ?? r.modelId, n: r.n })),
+    // Carry each pick's "why" (the selection rationale) so the UI can teach trust in the ranking.
+    models: decision.fanout.map((r) => ({
+      modelId: r.modelId,
+      label: getModel(r.modelId)?.label ?? r.modelId,
+      n: r.n,
+      why: r.rationale || undefined,
+    })),
   };
 
   // Guard the whole fan-out against the ceiling up front — on the WORST-CASE (high) estimate,
@@ -107,21 +115,32 @@ export async function* coordinateImage(
       return;
     }
     push({ type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n });
+    // Per-model lifecycle record: wall time + delivered count → a terminal model_done / model_error,
+    // so the UI can show each model's true state (still cooking vs settled vs failed) — never inferred.
+    const t0 = Date.now();
+    let delivered = 0;
+    let failed = false;
     try {
       for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: fittedRefs })) {
         if (ev.type === 'tile') {
           const tile: GalleryTile = { modelId: model.id, modelLabel: model.label, image: ev.image };
           tiles.push(tile);
+          delivered += 1;
           push({ type: 'tile', tile, totalSoFar: tiles.length });
         } else if (ev.type === 'done') {
           costUsd = Number((costUsd + ev.costUsd).toFixed(3));
         } else if (ev.type === 'error') {
+          failed = true;
           push({ type: 'model_error', modelId: model.id, reason: ev.reason });
         }
       }
     } catch (err) {
+      failed = true;
       push({ type: 'model_error', modelId: model.id, reason: err instanceof Error ? err.message : 'adapter crashed' });
     }
+    // A model that delivered tiles before erroring still ends 'failed' — partial output is honest,
+    // but the terminal state names the failure (the tiles it did land remain in the gallery).
+    if (!failed) push({ type: 'model_done', modelId: model.id, delivered, ms: Date.now() - t0 });
   };
 
   let running = decision.fanout.length;
