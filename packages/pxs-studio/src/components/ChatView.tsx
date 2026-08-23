@@ -213,9 +213,10 @@ export default function ChatView({ initialPrompt }: Props) {
     .reverse()
     .flatMap((t) => t.images.map((img) => ({ ...img, turnId: t.id })));
   const generating = turns.some((t) => t.generating);
-  // The active render's fan (per-model live status) — drives the stage's per-model loaders so ALL
-  // N show at once, not a single ambiguous spinner.
-  const genFan = turns.find((t) => t.generating)?.fan ?? [];
+  // The MOST RECENT render's fan (per-model status) — drives the stage's per-model loaders so ALL N
+  // show at once, not a single ambiguous spinner. Not limited to the generating turn: once the run
+  // settles, the same fan tells the stage which models succeeded and which failed (and why).
+  const genFan = [...turns].reverse().find((t) => t.fan && t.fan.length > 0)?.fan ?? [];
 
   const openWorkflow = useCallback(
     (medium: 'image' | 'video') => setActiveMedium(medium),
