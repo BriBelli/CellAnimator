@@ -19,7 +19,8 @@ TV-MA strengths. Gate the same as Replicate TV-MA routes.
 - **Docs (refresh source):** https://docs.x.ai/docs/models
 
 ## Models
-_No curated models yet — the registry refresh sources them from the provider docs._
+### Image
+- **Grok Image (xAI)** (`grok-2-image`) — xAI Grok image generation — strong photoreal + expressive character work (Brian rated it a hit for characters where Nano/others faltered). Accepts reference images via images/edits (compose / character-match). _[tier 2 · refs 8, 5 aspect ratios]_
 
 _Live connection health is tracked separately in `state/health.json` (not here — this file is durable
 knowledge, not runtime state)._
