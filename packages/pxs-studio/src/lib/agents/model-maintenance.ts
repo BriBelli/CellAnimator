@@ -16,6 +16,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { AGENT_MODELS } from './model-config';
 import {
   type ImageModel,
   type Capability,
@@ -28,7 +29,7 @@ import { loadCards, SYSTEM_USER_ID } from './live-catalog';
 import type { Repository } from '../db/repository';
 import type { ModelCard, ModelRefreshRecord } from '../db/models';
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = AGENT_MODELS.maintenance;
 const DEFAULT_RETIRE_THRESHOLD = 3;
 
 /** A model the refresh worker discovered live, awaiting research. */

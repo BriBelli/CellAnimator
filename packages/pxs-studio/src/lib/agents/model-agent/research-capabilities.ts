@@ -10,8 +10,9 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { tavilySearch, tavilyConfigured, type WebResult } from './tavily';
+import { AGENT_MODELS } from '../model-config';
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = AGENT_MODELS.research;
 
 export interface CapabilityResearch {
   modelId: string;

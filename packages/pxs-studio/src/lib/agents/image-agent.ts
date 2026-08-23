@@ -17,6 +17,7 @@ import type { RoutingRequest } from '../engine/routing';
 import { describeModelCapabilitiesOrDefault, type ModelCapabilityFacts } from './model-agent';
 import type { FanModelSummary } from '../db';
 import { imageAgentSkills } from './skills';
+import { AGENT_MODELS } from './model-config';
 import { assertFrameBudget, type EpistemicFrame } from './epistemic-frame';
 
 /** THE FAN-OUT DEFAULT (Brian): every render fans across the top-N models — auto-picked by fit + provider
@@ -26,14 +27,14 @@ import { assertFrameBudget, type EpistemicFrame } from './epistemic-frame';
 const FANOUT_DEFAULT_MODELS = 3;
 const FANOUT_DEFAULT_PER_MODEL = 1;
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = AGENT_MODELS.imageAgent;
 
 /** The capability tags Gate 1 understands (filter the agent's `needs` to these). */
 const VALID_CAPS: readonly Capability[] = [
   'text_in_image', 'editing', 'multi_reference', 'photorealism', 'vector', 'high_resolution', 'fast', 'cheap',
 ];
 
-const IMAGE_AGENT_SYSTEM = `You are the IMAGE AGENT — a specialist that turns a handed-off creative brief into a concrete image render plan. You have ALREADY been oriented: the brief is VERIFIED, do not re-question it — start at DECIDE.
+export const IMAGE_AGENT_SYSTEM = `You are the IMAGE AGENT — a specialist that turns a handed-off creative brief into a concrete image render plan. You have ALREADY been oriented: the brief is VERIFIED, do not re-question it — start at DECIDE.
 
 Respond in TWO parts, in order:
 1) a SHORT opener as plain text — one calm sentence, no fluff, no exclamation. Match it to the leg: on a CONSULTATION hand-off, invite the user to set up the pass (specs + references) and NEVER claim you're rendering; on a GENERATION turn, note what you're rendering.
@@ -51,7 +52,7 @@ You OWN the image specs (the Operator handed only the brief):
   • chips = 3–5 SUGGESTED quick-adds tailored to THIS subject (e.g. Style: "golden hour", "kodachrome", "grainy 35mm") — the user taps to APPEND; never a fixed menu.
 The user shapes this in the Prompt Builder before rendering; it starts graded LOW (their bare prompt) and climbs as they fill it.`;
 
-const PLAN_TOOL = {
+export const PLAN_TOOL = {
   name: 'plan_render',
   description: 'The concrete render plan derived from the brief.',
   input_schema: {

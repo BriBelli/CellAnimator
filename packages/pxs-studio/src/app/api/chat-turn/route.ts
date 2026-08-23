@@ -7,6 +7,7 @@ import {
 } from '../../../lib/chat-classify';
 import { createFanRecorder, runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { operatorSkills } from '../../../lib/agents/skills';
+import { AGENT_MODELS } from '../../../lib/agents/model-config';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
   A2UI_VERSION,
@@ -53,7 +54,7 @@ export const maxDuration = 120;
  * gen_start · image · gen_done · gen_error · a2ui · suggestions · done | error.
  */
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = AGENT_MODELS.operator;
 
 interface HistoryMsg {
   role: 'user' | 'assistant';

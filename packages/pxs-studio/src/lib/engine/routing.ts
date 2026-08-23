@@ -23,8 +23,9 @@ import {
   type ImageModel,
 } from './model-registry';
 import { classifyRequest, crossValidateFit, pickRoster } from './selection';
+import { AGENT_MODELS } from '../agents/model-config';
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = AGENT_MODELS.ranker;
 
 /** What the user wants, normalized into routable terms. */
 export interface RoutingRequest {
