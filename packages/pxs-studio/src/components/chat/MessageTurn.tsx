@@ -25,6 +25,7 @@ import { QuestionBlock } from './QuestionBlock';
 import { ProposalBlock } from './ProposalBlock';
 import { ReferencesBlock } from './ReferencesBlock';
 import { MessageActions } from './MessageActions';
+import { FanStatus } from './FanStatus';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { StreamingCursor } from './StreamingCursor';
 import { Markdown } from './Markdown';
@@ -302,6 +303,14 @@ export function MessageTurn({
               </div>
             )}
 
+            {/* The thought process KEPT — once the turn lands, the reel collapses into a
+                "Reasoning (N) · Xs" record you can reopen, instead of vanishing with the work. */}
+            {!running && (done || resultArrived) && turn.steps.length > 0 && (
+              <div className="pxc-choosing-reveal" style={{ marginTop: 'var(--a2ui-space-2)' }}>
+                <ThinkingIndicator steps={turn.steps} record />
+              </div>
+            )}
+
             {/* A2UI question — the agent's ask affordance (label + text-area + chips). */}
             {turn.a2ui && turn.a2ui.kind === 'question' && (
               <div className="pxc-a2ui-reveal" style={{ marginTop: 'var(--a2ui-space-4)' }}>
@@ -340,6 +349,15 @@ export function MessageTurn({
             {turn.agentText && (
               <div className="pxc-assistant-text pxc-a2ui-reveal" style={{ marginTop: 'var(--a2ui-space-2)' }}>
                 <Markdown>{turn.agentText}</Markdown>
+              </div>
+            )}
+
+            {/* FAN STATUS — the command-center view of a multi-model render: which models, their
+                live progress, honest per-model failure. Stays after the run as the record of it
+                (and rehydrates from the persisted summary on reload). */}
+            {turn.fan && turn.fan.length > 0 && (
+              <div className="pxc-a2ui-reveal" style={{ marginTop: 'var(--a2ui-space-3)' }}>
+                <FanStatus fan={turn.fan} generating={turn.generating} />
               </div>
             )}
 

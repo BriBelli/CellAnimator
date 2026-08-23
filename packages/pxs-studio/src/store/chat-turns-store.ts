@@ -394,15 +394,23 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                 const steps = t.steps.slice();
                 const idx = stepId != null ? steps.findIndex((st) => st.id === stepId) : -1;
                 if (evt.status === 'start') {
+                  // Stamp the start so `done` can record how long the step actually took — the
+                  // per-step timing the kept reasoning record surfaces.
                   const next: ThinkingStep = {
                     id: stepId,
                     label: typeof evt.label === 'string' ? evt.label : '',
                     state: 'active',
+                    startedAt: Date.now(),
                   };
                   if (idx >= 0) steps[idx] = { ...steps[idx], ...next };
                   else steps.push(next);
                 } else if (evt.status === 'done' && idx >= 0) {
-                  steps[idx] = { ...steps[idx], state: 'done' };
+                  const startedAt = steps[idx].startedAt;
+                  steps[idx] = {
+                    ...steps[idx],
+                    state: 'done',
+                    ms: startedAt != null ? Date.now() - startedAt : steps[idx].ms,
+                  };
                 }
                 return { ...t, steps };
               }),

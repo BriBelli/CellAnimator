@@ -31,6 +31,10 @@ export interface ThinkingStep {
   detail?: string;
   /** Optional chain-of-thought prose — shown in the expanded view. */
   reasoning?: string;
+  /** When this step started (ms epoch) — stamped by the store on `start`. */
+  startedAt?: number;
+  /** How long the step took (ms) — stamped by the store on `done`. Surfaced in the record. */
+  ms?: number;
 }
 
 export interface ThinkingIndicatorProps {
@@ -40,6 +44,10 @@ export interface ThinkingIndicatorProps {
   steps?: ThinkingStep[];
   /** Override the loading mode (defaults to the user setting). */
   mode?: LoadingMode;
+  /** RECORD mode — the turn is DONE. Instead of a live reel, render one collapsed
+   *  "Reasoning (N) · 4.2s" row that expands to the full step history. The thought process is part
+   *  of the work, so it survives the turn instead of vanishing when the result lands. */
+  record?: boolean;
 }
 
 /** Height of one reel row (px) — the single-line window; the reel translates by this per step. */
@@ -102,6 +110,20 @@ const CSS = `
 .pxc-think__expanded .pxc-think__step { animation: pxc-think-step-in 250ms var(--a2ui-ease-entrance) both; }
 .pxc-think__expanded .pxc-think__step--current { color: var(--a2ui-text-primary); }
 
+/* ── record: the DONE turn's collapsed "Reasoning (N)" row ────────────────── */
+.pxc-think__record-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: none; background: none;
+  color: var(--a2ui-text-tertiary); font-family: var(--a2ui-font-family); font-size: var(--a2ui-text-sm);
+  cursor: pointer; border-radius: var(--a2ui-radius-sm);
+}
+.pxc-think__record-btn:hover { color: var(--a2ui-text-secondary); }
+.pxc-think__record-btn svg { width: 12px; height: 12px; transition: transform 0.2s ease; }
+.pxc-think__record-btn[data-open="true"] svg { transform: rotate(180deg); }
+.pxc-think__record-secs { color: var(--a2ui-text-tertiary); font-variant-numeric: tabular-nums; }
+.pxc-think__record-body { margin-top: var(--a2ui-space-2); padding-left: var(--a2ui-space-2);
+  border-left: 1px solid var(--a2ui-border-subtle); display: flex; flex-direction: column; gap: 6px; }
+.pxc-think__step-ms { color: var(--a2ui-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; }
+
 /* expand toggle */
 .pxc-think__expand { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: ${REEL_STEP_H}px; border: none; background: none; color: var(--a2ui-text-tertiary);
@@ -138,10 +160,50 @@ function StepRow({ step, current, full }: { step: ThinkingStep; current: boolean
     <div className={`pxc-think__step${current ? ' pxc-think__step--current' : ''}`}>
       {step.state === 'done' ? <Check /> : <span className="pxc-think__step-spin" />}
       <span className="pxc-think__step-text">
-        <span className="pxc-think__step-label">{step.label}</span>
+        <span className="pxc-think__step-label">
+          {step.label}
+          {full && step.ms != null && step.ms >= 100 && (
+            <span className="pxc-think__step-ms"> · {(step.ms / 1000).toFixed(1)}s</span>
+          )}
+        </span>
         {full && step.detail && <span className="pxc-think__step-detail">{step.detail}</span>}
         {full && step.reasoning && <span className="pxc-think__step-reason">{step.reasoning}</span>}
       </span>
+    </div>
+  );
+}
+
+/**
+ * RECORD — the finished turn's thought process, kept. One calm "Reasoning (N) · 4.2s" row that
+ * expands to the full step history with per-step timings. The reel used to vanish the moment the
+ * result landed, taking the whole account of HOW the work happened with it.
+ */
+function ThinkingRecord({ steps }: { steps: ThinkingStep[] }) {
+  const [open, setOpen] = useState(false);
+  const total = steps.reduce((s, st) => s + (st.ms ?? 0), 0);
+  return (
+    <div className="pxc-think">
+      <button
+        type="button"
+        className="pxc-think__record-btn"
+        data-open={open ? 'true' : 'false'}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? 'Hide the workflow' : 'Show how this was worked out'}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+        Reasoning ({steps.length})
+        {total >= 100 && <span className="pxc-think__record-secs">· {(total / 1000).toFixed(1)}s</span>}
+      </button>
+      {open && (
+        <div className="pxc-think__record-body">
+          {steps.map((s, i) => (
+            <StepRow key={s.id ?? i} step={s} current={false} full />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -158,7 +220,7 @@ function useElapsed(active: boolean): number {
   return n;
 }
 
-export function ThinkingIndicator({ message, steps, mode }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ message, steps, mode, record }: ThinkingIndicatorProps) {
   const settingMode = useSettings((s) => s.loadingMode);
   const m = mode ?? settingMode;
   const all = Array.isArray(steps) ? steps : [];
@@ -166,12 +228,23 @@ export function ThinkingIndicator({ message, steps, mode }: ThinkingIndicatorPro
   const active = hasSteps ? currentStepIndex(all) : 0;
 
   const [expanded, setExpanded] = useState(false);
-  const elapsed = useElapsed(m === 'simple');
+  const elapsed = useElapsed(m === 'simple' && !record);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Keep the expanded view pinned to the active step as new steps stream in.
   useEffect(() => {
     if (expanded && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [expanded, all.length]);
+
+  // ── RECORD: the turn is done — the thought process is kept, not discarded ──
+  if (record) {
+    if (!hasSteps) return null;
+    return (
+      <>
+        <style>{CSS}</style>
+        <ThinkingRecord steps={all} />
+      </>
+    );
+  }
 
   // ── SIMPLE: spinner + label + seconds ──
   if (m === 'simple') {
