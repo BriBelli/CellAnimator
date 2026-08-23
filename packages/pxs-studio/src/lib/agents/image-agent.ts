@@ -17,7 +17,7 @@ import type { RoutingRequest } from '../engine/routing';
 import { describeModelCapabilitiesOrDefault, type ModelCapabilityFacts } from './model-agent';
 import type { FanModelSummary } from '../db';
 import { imageAgentSkills } from './skills';
-import { AGENT_MODELS } from './model-config';
+import { AGENT_MODELS, IMAGE_BRAIN_FALLBACK } from './model-config';
 import { assertFrameBudget, type EpistemicFrame } from './epistemic-frame';
 
 /** THE FAN-OUT DEFAULT (Brian): every render fans across the top-N models — auto-picked by fit + provider
@@ -262,6 +262,45 @@ export function createFanRecorder() {
  * turn still succeeds (graceful specialist). Only a TOTAL failure — routing found nothing, the budget
  * gate refused, or zero images landed — becomes a turn-level `gen_error`.
  */
+type BrainFinal = { stop_reason?: string; usage?: { input_tokens?: number; output_tokens?: number }; content?: Array<{ type: string; name?: string; input?: unknown; text?: string }> };
+
+/**
+ * Run an image-brain call with a SAFETY NET. Streams the primary brain (Fable by default) so its opener
+ * flows live; if the primary REFUSES (Fable's `refusal` stop reason) or the call throws, it silently
+ * falls back to the Opus floor (IMAGE_BRAIN_FALLBACK) so a request NEVER dies on a refusal. Yields the
+ * usual `agent_text` deltas, then a `__final` sentinel carrying the final message for the caller to read
+ * the tool call + usage. `params.model` is set per attempt.
+ */
+async function* craftWithFallback(
+  client: Anthropic,
+  params: Record<string, unknown>,
+): AsyncGenerator<ImageAgentEvent | { type: '__final'; final: BrainFinal }> {
+  const primary = AGENT_MODELS.imageAgent;
+  const fallback = IMAGE_BRAIN_FALLBACK;
+  try {
+    const stream = client.messages.stream({ ...params, model: primary } as any);
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
+        yield { type: 'agent_text', delta: event.delta.text };
+      }
+    }
+    const final = (await stream.finalMessage()) as BrainFinal;
+    if (final.stop_reason !== 'refusal' || primary === fallback) {
+      yield { type: '__final', final };
+      return;
+    }
+    console.warn(`[image-agent] ${primary} refused — falling back to ${fallback}`);
+  } catch (err) {
+    console.warn(`[image-agent] ${primary} failed (${err instanceof Error ? err.message : err}) — falling back to ${fallback}`);
+  }
+  // Fallback on the Opus floor (non-streamed; the call is small so it won't time out).
+  const final = (await client.messages.create({ ...params, model: fallback } as any)) as BrainFinal;
+  for (const b of final.content ?? []) {
+    if (b.type === 'text' && b.text) yield { type: 'agent_text', delta: b.text };
+  }
+  yield { type: '__final', final };
+}
+
 async function* streamFan(req: RoutingRequest, budgetUsd?: number): AsyncIterable<ImageAgentEvent> {
   let cost = 0;
   let scoreByModel: Record<string, number> = {};
@@ -434,13 +473,11 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
           { role: 'user' as const, content: userContent },
         ],
       };
-      const stream = client.messages.stream(params as any);
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
-          yield { type: 'agent_text', delta: event.delta.text };
-        }
+      let final: BrainFinal = {};
+      for await (const ev of craftWithFallback(client, params)) {
+        if (ev.type === '__final') final = ev.final;
+        else yield ev;
       }
-      const final = await stream.finalMessage();
       yield {
         type: 'agent_usage',
         inputTokens: (final as { usage?: { input_tokens?: number } })?.usage?.input_tokens ?? 0,
@@ -590,13 +627,11 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
         { role: 'user' as const, content: userContent },
       ],
     };
-    const stream = client.messages.stream(params as any);
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
-        yield { type: 'agent_text', delta: event.delta.text };
-      }
+    let final: BrainFinal = {};
+    for await (const ev of craftWithFallback(client, params)) {
+      if (ev.type === '__final') final = ev.final;
+      else yield ev;
     }
-    const final = await stream.finalMessage();
     yield {
       type: 'agent_usage',
       inputTokens: (final as { usage?: { input_tokens?: number } })?.usage?.input_tokens ?? 0,

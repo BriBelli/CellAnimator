@@ -35,8 +35,10 @@ export const AGENT_MODELS = {
   /** Front-door Operator (classify / decide the OODA verdict) — interactive, latency-sensitive. */
   operator: role('PIXCEL_MODEL_OPERATOR'),
   /** The IMAGE AGENT's brain — crafts the model-ready prompt + shapes the builder. Where craft lives.
-   *  THE Fable pilot target: set PIXCEL_MODEL_IMAGE_PROMPT=claude-fable-5 to trial it here alone. */
-  imageAgent: role('PIXCEL_MODEL_IMAGE_PROMPT'),
+   *  Defaults to FABLE (Brian: it's the artisan brain, and quality is the product — professionals want
+   *  the best). Overridable to Opus via PIXCEL_MODEL_IMAGE_PROMPT=claude-opus-4-8 for anyone who wants
+   *  the cheaper floor. On a refusal/error it falls back to IMAGE_BRAIN_FALLBACK so a request never dies. */
+  imageAgent: process.env.PIXCEL_MODEL_IMAGE_PROMPT?.trim() || 'claude-fable-5',
   /** Gate-2 model RANKER — the cross-validation reasoning over the roster shortlist. */
   ranker: role('PIXCEL_MODEL_RANKER'),
   /** Capability RESEARCH extraction — offline, self-maintaining registry. */
@@ -44,5 +46,8 @@ export const AGENT_MODELS = {
   /** Registry MAINTENANCE reasoning — offline. */
   maintenance: role('PIXCEL_MODEL_MAINTENANCE'),
 } as const;
+
+/** When the image brain (Fable) REFUSES or errors, retry on this — the locked floor. Never dead-end. */
+export const IMAGE_BRAIN_FALLBACK = MODEL_FLOOR;
 
 export type AgentRole = keyof typeof AGENT_MODELS;
