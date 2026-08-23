@@ -216,7 +216,8 @@ export default function ChatView({ initialPrompt }: Props) {
   // The MOST RECENT render's fan (per-model status) — drives the stage's per-model loaders so ALL N
   // show at once, not a single ambiguous spinner. Not limited to the generating turn: once the run
   // settles, the same fan tells the stage which models succeeded and which failed (and why).
-  const genFan = [...turns].reverse().find((t) => t.fan && t.fan.length > 0)?.fan ?? [];
+  const fanTurn = [...turns].reverse().find((t) => t.fan && t.fan.length > 0);
+  const genFan = fanTurn?.fan ?? [];
 
   const openWorkflow = useCallback(
     (medium: 'image' | 'video') => setActiveMedium(medium),
@@ -494,6 +495,7 @@ export default function ChatView({ initialPrompt }: Props) {
               onSaveAsset={onSaveAsset}
               generating={generating}
               genPlan={genFan}
+              fanTurnId={fanTurn?.id}
               medium={workspaceMedium}
               contextLabel={activeFrame?.subject || activeFrame?.goal}
             />

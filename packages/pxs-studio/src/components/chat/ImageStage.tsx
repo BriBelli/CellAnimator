@@ -42,6 +42,11 @@ interface ImageStageProps {
   /** The active render's fan — per-model live status (planned · running · done · failed), so every
    *  model in the fan shows its own state at once instead of one ambiguous spinner. */
   genPlan?: FanModelStatus[];
+  /** The turn the fan belongs to. REQUIRED for correct loader math across a session: the stage shows
+   *  every image in the conversation, so "how many are still cooking" must count only THIS render's
+   *  tiles — otherwise a second render across the same models sees its quota already filled by the
+   *  first render's images and shows no loaders at all. */
+  fanTurnId?: string;
   medium: 'image' | 'video';
   /** The active workflow's subject/goal — personalizes the empty state to the in-state context
    *  (consult-first framing) instead of a generic placeholder. */
@@ -300,7 +305,7 @@ function StateGlyph({ state }: { state: FanModelStatus['state'] }) {
   );
 }
 
-export function ImageStage({ images, generating, genPlan, medium, contextLabel, onSaveAsset }: ImageStageProps) {
+export function ImageStage({ images, generating, genPlan, fanTurnId, medium, contextLabel, onSaveAsset }: ImageStageProps) {
   const isVideo = medium === 'video';
   const label = isVideo ? 'video' : 'image';
   // A fan that produced NOTHING still has content to show: the failed columns and their reasons.
@@ -367,6 +372,9 @@ export function ImageStage({ images, generating, genPlan, medium, contextLabel, 
   // once — not one lone spinner. A FAILED model keeps its column and says why, instead of its loaders
   // silently vanishing. Falls back to arrived-only when there's no fan (an older persisted render).
   const plan = genPlan && genPlan.length > 0 ? genPlan : null;
+  /** Tiles THIS render landed for a model — the loader math must ignore earlier renders' images. */
+  const landedThisRun = (modelLabel: string) =>
+    (arrived.get(modelLabel) ?? []).filter(({ img }) => (fanTurnId ? img.turnId === fanTurnId : true)).length;
   const groups: {
     label: string;
     items: { img: StageImage; gi: number }[];
@@ -374,18 +382,21 @@ export function ImageStage({ images, generating, genPlan, medium, contextLabel, 
     state: FanModelStatus['state'];
     reason?: string;
     why?: string;
+    /** Tiles this model landed in THIS run (the failure tile keys off it, not the whole session). */
+    runLanded: number;
   }[] = plan
     ? plan.map((p) => {
         const items = arrived.get(p.label) ?? [];
+        const runLanded = landedThisRun(p.label);
         // A failed model shows NO pending loaders — its slot carries the failure tile instead.
-        const pending = p.state === 'failed' || p.state === 'done' ? 0 : Math.max(0, p.n - items.length);
-        return { label: p.label, items, pending, state: p.state, reason: p.reason, why: p.why };
+        const pending = p.state === 'failed' || p.state === 'done' ? 0 : Math.max(0, p.n - runLanded);
+        return { label: p.label, items, pending, state: p.state, reason: p.reason, why: p.why, runLanded };
       })
-    : [...arrived.entries()].map(([label, items]) => ({ label, items, pending: 0, state: 'done' as const }));
+    : [...arrived.entries()].map(([label, items]) => ({ label, items, pending: 0, state: 'done' as const, runLanded: items.length }));
   // A model that streamed a tile but wasn't in the fan (safety) still gets its column.
   if (plan) {
     for (const [label, items] of arrived) {
-      if (!plan.some((p) => p.label === label)) groups.push({ label, items, pending: 0, state: 'done' });
+      if (!plan.some((p) => p.label === label)) groups.push({ label, items, pending: 0, state: 'done', runLanded: items.length });
     }
   }
   const multiModel = groups.length > 1;
@@ -396,8 +407,7 @@ export function ImageStage({ images, generating, genPlan, medium, contextLabel, 
   // tiles interleave as one live feed (the POC's arrival-order lens).
   const streamPending = plan
     ? plan.flatMap((p) => {
-        const landed = (arrived.get(p.label) ?? []).length;
-        const left = p.state === 'failed' || p.state === 'done' ? 0 : Math.max(0, p.n - landed);
+        const left = p.state === 'failed' || p.state === 'done' ? 0 : Math.max(0, p.n - landedThisRun(p.label));
         return Array.from({ length: left }, (_, i) => ({ key: `${p.modelId || p.label}-${i}`, f: p }));
       })
     : [];
@@ -506,12 +516,12 @@ export function ImageStage({ images, generating, genPlan, medium, contextLabel, 
                         <span className="pxc-stage-spinner" />
                         <span className="pxc-stage-pending-label">{g.label}</span>
                         <span className="pxc-stage-phase">
-                          {phaseText({ state: g.state, delivered: g.items.length, n: g.items.length + g.pending })}
+                          {phaseText({ state: g.state, delivered: g.runLanded, n: g.runLanded + g.pending })}
                         </span>
                       </div>
                     ))}
                     {/* The failure KEEPS the slot — the model that didn't deliver is still accounted for. */}
-                    {g.state === 'failed' && g.items.length === 0 && (
+                    {g.state === 'failed' && g.runLanded === 0 && (
                       <div className="pxc-stage-failed">
                         <StateGlyph state="failed" />
                         <span>{plainReason(g.reason)}</span>
