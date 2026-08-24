@@ -40,11 +40,11 @@ export const AGENT_MODELS = {
    *  the cheaper floor. On a refusal/error it falls back to IMAGE_BRAIN_FALLBACK so a request never dies. */
   imageAgent: process.env.PIXCEL_MODEL_IMAGE_PROMPT?.trim() || 'claude-fable-5',
   /** Gate-2 model RANKER — the cross-validation reasoning over the roster shortlist. */
-  ranker: role('PIXCEL_MODEL_RANKER'),
+  ranker: (process.env.PIXCEL_MODEL_RANKER?.trim() || 'claude-fable-5'),
   /** Capability RESEARCH extraction — offline, self-maintaining registry. */
-  research: role('PIXCEL_MODEL_RESEARCH'),
+  research: (process.env.PIXCEL_MODEL_RESEARCH?.trim() || 'claude-fable-5'),
   /** Registry MAINTENANCE reasoning — offline. */
-  maintenance: role('PIXCEL_MODEL_MAINTENANCE'),
+  maintenance: (process.env.PIXCEL_MODEL_MAINTENANCE?.trim() || 'claude-fable-5'),
 } as const;
 
 /** When the image brain (Fable) REFUSES or errors, retry on this — the locked floor. Never dead-end. */

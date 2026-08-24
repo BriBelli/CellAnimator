@@ -22,8 +22,8 @@ import { reasonForStatus } from './_util';
 
 /** registry modelId → Replicate "owner/model". */
 const MODEL_PATH: Record<string, string> = {
-  'flux-1.1-pro': 'black-forest-labs/flux-1.1-pro',
-  'flux-dev': 'black-forest-labs/flux-dev',
+  'flux-2-pro': 'black-forest-labs/flux-2-pro',
+  'flux-2-dev': 'black-forest-labs/flux-2-dev',
 };
 
 /** Rough per-image estimate (registry carries the real band). */
@@ -57,7 +57,13 @@ class ReplicateExecutor implements ImageExecutor {
 
     const input: Record<string, unknown> = { prompt: req.prompt };
     if (req.aspectRatio) input.aspect_ratio = req.aspectRatio;
-    if (req.references && req.references[0]) input.image_prompt = req.references[0];
+    // FLUX.2 multi-reference: input_image (first) + input_image_2..input_image_9 (up to 8 refs total).
+    if (req.references && req.references.length > 0) {
+      input.input_image = req.references[0];
+      for (let i = 1; i < Math.min(req.references.length, 9); i++) {
+        input[`input_image_${i + 1}`] = req.references[i];
+      }
+    }
 
     let res: Response;
     try {

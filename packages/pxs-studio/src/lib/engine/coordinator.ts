@@ -140,13 +140,23 @@ export async function* coordinateImage(
       return;
     }
     push({ type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n });
+    // CLAMP references to what THIS model documents it takes (graceful specialist: use its max, never
+    // bench). If we trimmed any, say so — an honest "used N of your M" instead of a silent drop.
+    const cap = model.referenceLimits
+      ? model.referenceLimits.object + model.referenceLimits.character + model.referenceLimits.style
+      : model.maxReferenceImages;
+    const allRefs = fittedRefs ?? [];
+    const modelRefs = allRefs.slice(0, Math.max(0, cap));
+    if (allRefs.length > modelRefs.length) {
+      push({ type: 'notice', message: `${model.label} used ${modelRefs.length} of your ${allRefs.length} references — its documented max.` });
+    }
     // Per-model lifecycle record: wall time + delivered count → a terminal model_done / model_error,
     // so the UI can show each model's true state (still cooking vs settled vs failed) — never inferred.
     const t0 = Date.now();
     let delivered = 0;
     let failed = false;
     try {
-      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: fittedRefs })) {
+      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: modelRefs.length > 0 ? modelRefs : undefined })) {
         if (ev.type === 'tile') {
           const tile: GalleryTile = { modelId: model.id, modelLabel: model.label, image: ev.image };
           tiles.push(tile);
