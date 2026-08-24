@@ -201,7 +201,7 @@ export type ImageAgentEvent =
   /** The fan PLAN — the models about to render (id + label + how many each + the pick's "why"),
    *  emitted the instant routing resolves so the stage can show ALL N loaders at once (you see every
    *  model is cooking, not one) and the chat can explain each pick. */
-  | { type: 'gen_plan'; models: { modelId: string; label: string; n: number; why?: string }[] }
+  | { type: 'gen_plan'; models: { modelId: string; label: string; n: number; why?: string }[]; dropped?: { modelId: string; label: string; reason: string }[] }
   /** One model's live lifecycle inside the fan — running → done | failed. A failed model NEVER fails
    *  the turn (graceful specialist): the rest of the fan keeps streaming; the UI shows the state. */
   | { type: 'fan_model'; modelId: string; state: 'running' | 'done' | 'failed'; delivered?: number; ms?: number; reason?: string }
@@ -307,7 +307,7 @@ async function* streamFan(req: RoutingRequest, budgetUsd?: number): AsyncIterabl
   for await (const ev of coordinateImage(req, { maxCostUsd: budgetUsd })) {
     if (ev.type === 'routed') {
       scoreByModel = Object.fromEntries(ev.decision.fanout.map((r) => [r.modelId, r.score ?? 0]));
-      yield { type: 'gen_plan', models: ev.models };
+      yield { type: 'gen_plan', models: ev.models, dropped: ev.dropped };
     } else if (ev.type === 'model_start') {
       yield { type: 'fan_model', modelId: ev.modelId, state: 'running' };
     } else if (ev.type === 'tile') {

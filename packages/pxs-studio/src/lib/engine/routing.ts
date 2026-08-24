@@ -65,7 +65,7 @@ export interface RoutedModel {
 /** A Gate-1 drop, kept for transparency. */
 export interface DroppedModel {
   modelId: string;
-  reason: 'missing_capability' | 'aspect_ratio' | 'no_edit' | 'no_key' | 'over_budget' | 'preview';
+  reason: 'missing_capability' | 'ref_capacity' | 'aspect_ratio' | 'no_edit' | 'no_key' | 'over_budget' | 'preview';
 }
 
 /** The routing outcome the coordinator dispatches. */
@@ -117,7 +117,7 @@ export function gate1Filter(
         ? m.referenceLimits.object + m.referenceLimits.character + m.referenceLimits.style
         : m.maxReferenceImages;
       if (capacity < req.references.length) {
-        dropped.push({ modelId: m.id, reason: 'missing_capability' });
+        dropped.push({ modelId: m.id, reason: 'ref_capacity' });
         continue;
       }
     }

@@ -26,7 +26,7 @@ export interface GalleryTile {
 
 /** Events the coordinator streams while curating + running the workflow. */
 export type CoordEvent =
-  | { type: 'routed'; decision: RoutingDecision; models: { modelId: string; label: string; n: number; why?: string }[] }
+  | { type: 'routed'; decision: RoutingDecision; models: { modelId: string; label: string; n: number; why?: string }[]; dropped: { modelId: string; label: string; reason: string }[] }
   | { type: 'model_start'; modelId: string; modelLabel: string; n: number }
   | { type: 'tile'; tile: GalleryTile; totalSoFar: number }
   /** One model's adapter stream settled cleanly — its per-model lifecycle record (delivered + wall ms). */
@@ -49,6 +49,23 @@ export interface CoordinateOptions {
  * Run a full image generation for a routing request, yielding events as the
  * workflow unfolds. Never throws — failures surface as `model_error` / `error`.
  */
+
+/** Turn a Gate-1 drop into a user-facing "skipped: <why>" — ONLY for reasons that explain why a model
+ *  the user might expect isn't in the fan (references too many, no key, no edit path, over budget).
+ *  Preview / aspect / bare capability drops are noise and are omitted. */
+function dropDetail(d: { modelId: string; reason: string }, refCount: number): { modelId: string; label: string; reason: string } | null {
+  const m = getModel(d.modelId);
+  const label = m?.label ?? d.modelId;
+  const cap = m?.maxReferenceImages ?? 1;
+  switch (d.reason) {
+    case 'ref_capacity': return { modelId: d.modelId, label, reason: `holds ${cap} reference${cap === 1 ? '' : 's'}, you attached ${refCount}` };
+    case 'no_key': return { modelId: d.modelId, label, reason: 'no API key configured' };
+    case 'no_edit': return { modelId: d.modelId, label, reason: 'no edit / reference path' };
+    case 'over_budget': return { modelId: d.modelId, label, reason: 'over the render budget' };
+    default: return null;
+  }
+}
+
 export async function* coordinateImage(
   req: RoutingRequest,
   opts: CoordinateOptions = {}
@@ -67,6 +84,7 @@ export async function* coordinateImage(
     yield { type: 'error', message: 'No configured image provider can satisfy this request.' };
     return;
   }
+  const refCount = req.references?.length ?? 0;
   yield {
     type: 'routed',
     decision,
@@ -77,6 +95,13 @@ export async function* coordinateImage(
       n: r.n,
       why: r.rationale || undefined,
     })),
+    // Account for the benched models too — the user picked N, this explains any shortfall (e.g. Flux
+    // holds 1 reference but you sent 3). Sorted best-first, capped so it never floods the panel.
+    dropped: decision.dropped
+      .map((d) => dropDetail(d, refCount))
+      .filter((x): x is { modelId: string; label: string; reason: string } => x != null)
+      .sort((a, b) => (getModel(b.modelId)?.tier ?? 0) - (getModel(a.modelId)?.tier ?? 0))
+      .slice(0, 4),
   };
 
   // Guard the whole fan-out against the ceiling up front — on the WORST-CASE (high) estimate,

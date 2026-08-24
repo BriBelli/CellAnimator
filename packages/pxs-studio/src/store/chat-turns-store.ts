@@ -183,7 +183,7 @@ export interface FanModelStatus {
   n: number;
   /** Images landed so far (== n when done). */
   delivered: number;
-  state: 'pending' | 'running' | 'done' | 'failed';
+  state: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
   /** Failure reason (adapter taxonomy or message) — only on 'failed'. */
   reason?: string;
   /** The selection rationale this model was picked by. */
@@ -495,16 +495,28 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
             // Routing resolved — the fan is known. Seed one status entry per model (plan order =
             // the agent's ranking) so the stage paints ALL N model loaders now.
             const models = Array.isArray(evt.models) ? evt.models : [];
+            const dropped = Array.isArray(evt.dropped) ? evt.dropped : [];
             patch(id, {
               generating: true,
-              fan: models.map((m: { modelId?: string; label?: string; n?: number; why?: string }) => ({
-                modelId: String(m.modelId ?? m.label ?? ''),
-                label: String(m.label ?? m.modelId ?? 'Model'),
-                n: Math.max(1, Number(m.n) || 1),
-                delivered: 0,
-                state: 'pending' as const,
-                why: typeof m.why === 'string' && m.why ? m.why : undefined,
-              })),
+              fan: [
+                ...models.map((m: { modelId?: string; label?: string; n?: number; why?: string }) => ({
+                  modelId: String(m.modelId ?? m.label ?? ''),
+                  label: String(m.label ?? m.modelId ?? 'Model'),
+                  n: Math.max(1, Number(m.n) || 1),
+                  delivered: 0,
+                  state: 'pending' as const,
+                  why: typeof m.why === 'string' && m.why ? m.why : undefined,
+                })),
+                // Benched models — shown as 'skipped' with the reason so every picked model is accounted for.
+                ...dropped.map((d: { modelId?: string; label?: string; reason?: string }) => ({
+                  modelId: String(d.modelId ?? d.label ?? ''),
+                  label: String(d.label ?? d.modelId ?? 'Model'),
+                  n: 0,
+                  delivered: 0,
+                  state: 'skipped' as const,
+                  reason: typeof d.reason === 'string' ? d.reason : undefined,
+                })),
+              ],
             });
           } else if (evt.type === 'fan_model') {
             // One model's lifecycle advanced (running → done | failed). PER-MODEL only: a failed

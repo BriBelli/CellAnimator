@@ -112,6 +112,10 @@ const CSS = `
 .pxc-stage-failed-sub { color: var(--a2ui-text-tertiary); font-size: var(--a2ui-text-xs); }
 
 .pxc-stage-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; padding: var(--a2ui-space-5) var(--a2ui-space-6) var(--a2ui-space-8); }
+.pxc-stage-skipped { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-2) var(--a2ui-space-4); margin-bottom: var(--a2ui-space-4); }
+.pxc-stage-skip-item { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-secondary); }
+.pxc-stage-skip-dash { color: var(--a2ui-text-tertiary); }
+.pxc-stage-skip-reason { color: var(--a2ui-text-tertiary); }
 /* BENTO — a repeating 4-tile rhythm (hero 16/9 span-2 · square · square · wide 16/10 span-2) over a
    2-col grid, so results pack like the mock instead of a uniform square grid. "dense" backfills the
    holes that spanning tiles would otherwise leave. */
@@ -371,7 +375,10 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
   // far + a shimmer tile per image still cooking + its live state), so you see all N models working at
   // once — not one lone spinner. A FAILED model keeps its column and says why, instead of its loaders
   // silently vanishing. Falls back to arrived-only when there's no fan (an older persisted render).
-  const plan = genPlan && genPlan.length > 0 ? genPlan : null;
+  const fullPlan = genPlan && genPlan.length > 0 ? genPlan : null;
+  // Benched models are shown as a compact note, not empty columns. Active models drive the columns.
+  const skipped = fullPlan ? fullPlan.filter((p) => p.state === 'skipped') : [];
+  const plan = fullPlan ? fullPlan.filter((p) => p.state !== 'skipped') : null;
   /** Tiles THIS render landed for a model — the loader math must ignore earlier renders' images. */
   const landedThisRun = (modelLabel: string) =>
     (arrived.get(modelLabel) ?? []).filter(({ img }) => (fanTurnId ? img.turnId === fanTurnId : true)).length;
@@ -479,6 +486,18 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
             )}
           </div>
           <div className="pxc-stage-scroll">
+            {/* Benched models — accounted for as a compact note so a smaller-than-picked fan is never a
+                silent mystery (e.g. Flux holds 1 reference but you attached 3). */}
+            {skipped.length > 0 && (
+              <div className="pxc-stage-skipped">
+                {skipped.map((sm) => (
+                  <span key={sm.modelId || sm.label} className="pxc-stage-skip-item">
+                    <span className="pxc-stage-skip-dash">–</span> {sm.label}
+                    {sm.reason ? <span className="pxc-stage-skip-reason"> · {sm.reason}</span> : null}
+                  </span>
+                ))}
+              </div>
+            )}
             {/* Pre-routing: generating but the fan isn't known yet — one honest loader until it lands. */}
             {generating && groups.length === 0 && (
               <div className="pxc-stage-groups">

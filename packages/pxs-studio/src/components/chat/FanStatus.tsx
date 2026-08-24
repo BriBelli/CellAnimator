@@ -85,6 +85,8 @@ const CSS = `
 .pxc-fan__spin { width: 11px; height: 11px; border: 1.5px solid var(--a2ui-border-default);
   border-top-color: var(--a2ui-accent); border-radius: 50%; animation: pxc-fan-spin 0.8s linear infinite; }
 .pxc-fan__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--a2ui-border-strong); }
+.pxc-fan__skip { color: var(--a2ui-text-tertiary); font-size: 13px; line-height: 1; }
+.pxc-fan__row[data-state="skipped"] { opacity: 0.6; }
 .pxc-fan__glyph[data-state="done"] { color: var(--a2ui-success); }
 .pxc-fan__glyph[data-state="failed"] { color: var(--a2ui-warning); }
 
@@ -141,27 +143,31 @@ function Warn() {
   );
 }
 
-/** One model's row — the API call as a visible, honest unit of work. */
+/** One model's row — the API call as a visible, honest unit of work (incl. benched models). */
 function ModelRow({ f }: { f: FanModelStatus }) {
+  const isSkipped = f.state === 'skipped';
   const pct = f.n > 0 ? Math.min(100, (f.delivered / f.n) * 100) : 0;
   const stateLabel =
-    f.state === 'failed' ? 'failed' : f.state === 'done' ? 'done' : f.state === 'running' ? 'rendering' : 'queued';
+    isSkipped ? 'skipped' : f.state === 'failed' ? 'failed' : f.state === 'done' ? 'done' : f.state === 'running' ? 'rendering' : 'queued';
   return (
     <div className="pxc-fan__row" data-state={f.state}>
       <div className="pxc-fan__row-head">
         <span className="pxc-fan__glyph" data-state={f.state} aria-label={stateLabel} title={stateLabel}>
-          {f.state === 'done' ? <Check /> : f.state === 'failed' ? <Warn /> : f.state === 'running' ? <span className="pxc-fan__spin" /> : <span className="pxc-fan__dot" />}
+          {isSkipped ? <span className="pxc-fan__skip">–</span> : f.state === 'done' ? <Check /> : f.state === 'failed' ? <Warn /> : f.state === 'running' ? <span className="pxc-fan__spin" /> : <span className="pxc-fan__dot" />}
         </span>
         <span className="pxc-fan__label" title={f.label}>{f.label}</span>
         <span className="pxc-fan__count">
-          {f.delivered}/{f.n}
-          {f.state === 'done' && f.ms != null ? ` · ${(f.ms / 1000).toFixed(1)}s` : ''}
+          {isSkipped ? 'skipped' : `${f.delivered}/${f.n}${f.state === 'done' && f.ms != null ? ` · ${(f.ms / 1000).toFixed(1)}s` : ''}`}
         </span>
       </div>
-      <div className="pxc-fan__bar">
-        <div className="pxc-fan__fill" style={{ width: `${pct}%` }} />
-      </div>
-      {f.state === 'failed' ? (
+      {!isSkipped && (
+        <div className="pxc-fan__bar">
+          <div className="pxc-fan__fill" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {isSkipped ? (
+        <span className="pxc-fan__why">{f.reason || 'not used for this render'}</span>
+      ) : f.state === 'failed' ? (
         <span className="pxc-fan__reason"><Warn /> {plainReason(f.reason)}</span>
       ) : (
         f.why && <span className="pxc-fan__why">{f.why}</span>
@@ -177,6 +183,7 @@ export function FanStatus({ fan, generating, mode }: FanStatusProps) {
 
   if (!Array.isArray(fan) || fan.length === 0) return null;
 
+  const active = fan.filter((f) => f.state !== 'skipped');
   const planned = fan.reduce((s, f) => s + f.n, 0);
   const delivered = fan.reduce((s, f) => s + f.delivered, 0);
   const failed = fan.filter((f) => f.state === 'failed').length;
@@ -193,7 +200,7 @@ export function FanStatus({ fan, generating, mode }: FanStatusProps) {
       <div className="pxc-fan__head">
         <span className="pxc-fan__title">Routing</span>
         <span className="pxc-fan__plan">
-          {fan.length} model{fan.length === 1 ? '' : 's'} · {planned} image{planned === 1 ? '' : 's'} planned
+          {active.length} model{active.length === 1 ? '' : 's'} · {planned} image{planned === 1 ? '' : 's'} planned
         </span>
       </div>
       <div className="pxc-fan__rows">
@@ -216,7 +223,7 @@ export function FanStatus({ fan, generating, mode }: FanStatusProps) {
         <div className="pxc-fan__compact" role="status" aria-live="polite">
           {generating ? <span className="pxc-fan__spin" /> : failed > 0 ? <Warn /> : <Check />}
           <span>
-            {fan.length} model{fan.length === 1 ? '' : 's'} · {footer}
+            {active.length} model{active.length === 1 ? '' : 's'} · {footer}
           </span>
           <button
             type="button"
