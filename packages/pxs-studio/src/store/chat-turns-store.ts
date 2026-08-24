@@ -9,6 +9,32 @@ import type { Source } from '../components/chat/SourcesRow';
 /** localStorage key holding the active thread id so a reload can restore the conversation. */
 export const THREAD_STORAGE_KEY = 'pxs-chat-thread';
 
+/** localStorage key for the fan-out picker config, so the user's models/count/images/aspect choices
+ *  survive a reload (they were resetting to the default every refresh — the '1/ea' bug). */
+const FAN_CONFIG_KEY = 'pxs-fan-config';
+const FAN_CONFIG_DEFAULT: FanConfig = { mode: 'auto', models: [], fanModels: 3, perModel: 1 };
+
+function loadFanConfig(): FanConfig {
+  if (typeof window === 'undefined') return { ...FAN_CONFIG_DEFAULT };
+  try {
+    const raw = window.localStorage.getItem(FAN_CONFIG_KEY);
+    if (!raw) return { ...FAN_CONFIG_DEFAULT };
+    const p = JSON.parse(raw) as Partial<FanConfig>;
+    return {
+      mode: p.mode === 'manual' ? 'manual' : 'auto',
+      models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === 'string') : [],
+      fanModels: typeof p.fanModels === 'number' ? Math.max(1, p.fanModels) : 3,
+      perModel: typeof p.perModel === 'number' ? Math.max(1, p.perModel) : 1,
+      aspect: typeof p.aspect === 'string' ? p.aspect : undefined,
+    };
+  } catch { return { ...FAN_CONFIG_DEFAULT }; }
+}
+
+function saveFanConfig(cfg: FanConfig): void {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(FAN_CONFIG_KEY, JSON.stringify(cfg)); } catch { /* quota/private mode — non-fatal */ }
+}
+
 /**
  * THE CHAT TURNS STORE — the Operator front door's view-model.
  *
@@ -615,7 +641,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     activeMedium: 'chat',
     activeFrame: null,
     viewMode: 'chat',
-    fanConfig: { mode: 'auto', models: [], fanModels: 3, perModel: 1 },
+    fanConfig: loadFanConfig(),
     partValues: {},
     partSeedTurn: null,
     lastEdit: null,
@@ -784,7 +810,8 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     },
     setActiveMedium: (medium) => set({ activeMedium: medium }),
     setViewMode: (mode) => set({ viewMode: mode }),
-    setFanConfig: (patch) => set((s) => ({ fanConfig: { ...s.fanConfig, ...patch } })),
+    setFanConfig: (patch) =>
+      set((s) => { const next = { ...s.fanConfig, ...patch }; saveFanConfig(next); return { fanConfig: next }; }),
     setThreadTitle: (title) => set({ threadTitle: title }),
     // Keep turns + threadId (the project); only the in-flight frame is dropped.
     enterSection: (medium) => set({ activeMedium: medium, activeFrame: null }),
