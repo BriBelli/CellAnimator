@@ -11,6 +11,8 @@ import type { ModelCard } from '../db/models';
 import type { ImageModel, Capability } from '../engine/model-registry';
 import { PROVIDERS, registryTag } from '../engine/provider-roster';
 import { researchModelCapabilities, type CapabilityResearch } from './model-agent/research-capabilities';
+import { loadCards } from './live-catalog';
+import { DEFAULT_TTL_HOURS } from '../engine/staleness';
 
 const SYSTEM_USER_ID = 'system';
 
@@ -79,6 +81,53 @@ export async function refreshCapabilities(
     } catch (err) {
       console.warn(`[capability-refresh] ${m.id} failed:`, err);
       results.push({ modelId: m.id, confidence: 'low', applied: false, patch: {}, sources: [] });
+    }
+  }
+  return results;
+}
+
+
+/**
+ * The DAILY self-heal for capability ACCURACY (not just existence). Researches any model whose sourced
+ * card is MISSING or past its TTL — grounded in live docs (Tavily + the research brain, Fable) — and
+ * persists the correction as a seed_override the catalog overlays. This is the fix for stale lies like
+ * "FLUX = 1 reference" living forever: every model's real limits get re-verified on a cycle, never
+ * hand-typed-and-forgotten. Capped per pass so a single trigger never spikes; it staggers across turns
+ * until the whole registry is fresh, then idles. Safe to fire-and-forget.
+ */
+export async function refreshCapabilitiesIfDue(
+  models: ImageModel[],
+  repo: Repository,
+  deps: CapabilityRefreshDeps & { ttlHours?: number; maxPerPass?: number },
+): Promise<CapabilityRefreshResult[]> {
+  const ttl = deps.ttlHours ?? DEFAULT_TTL_HOURS;
+  const maxPerPass = deps.maxPerPass ?? 3;
+
+  // researched_at per model, from the persisted sourced cards.
+  let stamped = new Map<string, number>();
+  try {
+    const cards = await loadCards(repo);
+    for (const [modelId, c] of cards) {
+      if (c.origin === 'seed_override' && typeof c.researched_at === 'number') stamped.set(modelId, c.researched_at);
+    }
+  } catch {
+    /* no cards yet — everything is due */
+  }
+
+  const due = models
+    .filter((m) => {
+      const at = stamped.get(m.id);
+      if (at == null) return true; // never researched → due
+      return (deps.now - at) / 3_600_000 >= ttl; // hours since last research past the TTL
+    })
+    .slice(0, maxPerPass);
+
+  const results: CapabilityRefreshResult[] = [];
+  for (const m of due) {
+    try {
+      results.push(await refreshOne(m, repo, deps));
+    } catch (err) {
+      console.warn(`[capability-refresh] ${m.id} due-refresh failed:`, err);
     }
   }
   return results;

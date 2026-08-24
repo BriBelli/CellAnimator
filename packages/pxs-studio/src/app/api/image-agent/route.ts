@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createFanRecorder, runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
 import { refreshRegistryIfDue } from '../../../lib/agents/model-refresh-runner';
+import { refreshCapabilitiesIfDue } from '../../../lib/agents/capability-refresh';
+import { IMAGE_MODELS } from '../../../lib/engine/model-registry';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
   A2UI_VERSION,
@@ -112,6 +114,9 @@ export async function POST(req: Request) {
   // TTL (see refreshRegistryIfDue). On the vast majority of turns nothing is due, so it's a single
   // cheap DB read and returns instantly. The user's response never waits on it. (stale-while-revalidate)
   void refreshRegistryIfDue(db, Date.now()).catch(() => {});
+  // …and re-VERIFY each model's real CAPABILITIES on the same daily cycle (ref limits, editing, versions)
+  // — grounded in live docs, not the seed. TTL-gated + capped, so it self-heals and then idles.
+  void refreshCapabilitiesIfDue(IMAGE_MODELS, db, { now: Date.now() }).catch(() => {});
 
   const history: HistoryMsg[] = Array.isArray(body.history)
     ? body.history
