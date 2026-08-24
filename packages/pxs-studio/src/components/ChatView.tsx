@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChatTurnsStore, a2uiSurface, type A2UIReferencesBlock, type A2UIBuilderBlock } from '../store/chat-turns-store';
 import { useSettings } from '../store/settings-store';
-import { Composer, Icon, SegmentedControl, type ComposerAttachment } from './ui';
+import { Composer, Icon, type ComposerAttachment } from './ui';
 import { MessageTurn } from './chat/MessageTurn';
 import { ImageStage, type StageImage } from './chat/ImageStage';
 import { VideoWorkspace } from './chat/VideoWorkspace';
@@ -363,28 +363,13 @@ export default function ChatView({ initialPrompt }: Props) {
               user brings (prompt + references) and transfers it to the specialist — it never gatekeeps.
               References persist on the turn (chat-turn route) so they ride along + rehydrate on reload. */}
           <Composer value={draft} onChange={setDraft} onSubmit={submit} attachEnabled />
-          {/* COMMAND ROW — the prompt is the command center (Artlist/Photolift pattern). The MEDIUM pill
-              (Chat · Image · Video) is the user's INTENT and DRIVES the nav: pick Image → the Image
-              section, and a send becomes a render. The render config (models · images · aspect) rides
-              alongside so it's set BEFORE you send. The Chat/IDE DISPLAY toggle is NOT here — it lives as
-              a vertical pill floated top-right of the section (out of the prompt). */}
-          <div className="pxs-cmd-row">
-            <SegmentedControl
-              label="Medium"
-              value={activeMedium}
-              onChange={(m) => setActiveMedium(m as 'chat' | 'image' | 'video')}
-              options={[
-                { value: 'chat', label: 'Chat', icon: <span className="pxs-cmd-seg">Chat</span> },
-                { value: 'image', label: 'Image', icon: <span className="pxs-cmd-seg">Image</span> },
-                { value: 'video', label: 'Video', icon: <span className="pxs-cmd-seg">Video</span> },
-              ]}
-            />
-            {activeMedium !== 'chat' && (
-              <div className="pxs-cmd-right">
-                <RenderConfig />
-              </div>
-            )}
-          </div>
+          {/* Render settings (models · images · aspect) — only in a creative section. The MEDIUM is set
+              by the main nav (Chat / Image / Video), not a duplicate pill on the prompt. */}
+          {activeMedium !== 'chat' && (
+            <div className="pxs-cmd-row">
+              <RenderConfig />
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -414,9 +399,7 @@ export default function ChatView({ initialPrompt }: Props) {
 
         /* COMMAND ROW under the composer — medium pills (left) drive the nav/intent; the render config
            (right) rides alongside. The Chat/IDE display toggle is NOT here (see the vertical pill). */
-        .pxs-cmd-row { display: flex; align-items: center; justify-content: space-between; gap: var(--a2ui-space-3); margin-top: 8px; flex-wrap: wrap; }
-        .pxs-cmd-right { display: flex; align-items: center; gap: var(--a2ui-space-2); }
-        .pxs-cmd-seg { display: inline-flex; align-items: center; gap: 5px; }
+        .pxs-cmd-row { display: flex; align-items: center; justify-content: flex-end; gap: var(--a2ui-space-3); margin-top: 8px; flex-wrap: wrap; }
 
 
         /* ── THE TRANSITION ─────────────────────────────────────────────────────────────
