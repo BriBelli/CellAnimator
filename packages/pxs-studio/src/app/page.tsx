@@ -155,7 +155,6 @@ export default function Home() {
   const splashStyle = useSettings((s) => s.splashStyle);
   const theme = useSettings((s) => s.theme);
   const activeMedium = useChatTurnsStore((s) => s.activeMedium);
-  const viewMode = useChatTurnsStore((s) => s.viewMode);
   const setActiveMedium = useChatTurnsStore((s) => s.setActiveMedium);
   const loadThread = useChatTurnsStore((s) => s.loadThread);
   const resetChat = useChatTurnsStore((s) => s.reset);
@@ -364,7 +363,7 @@ export default function Home() {
             >
               {/* PERSISTENT PROJECT IDENTITY — quiet, always-there, so you always know which project
                   you're in (and can jump to the list). A project you can't name is one you can't trust. */}
-              {stage === 'chat' && !assetsOpen && projectName && !(activeMedium !== 'chat' && viewMode === 'ide') && (
+              {stage === 'chat' && !assetsOpen && projectName && activeMedium === 'chat' && (
                 <button
                   type="button"
                   className="pxs-project-chip"
