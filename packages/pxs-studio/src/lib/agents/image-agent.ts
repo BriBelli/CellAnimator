@@ -15,6 +15,10 @@ import { coordinateImage } from '../engine/coordinator';
 import { type Capability, type PromptFormula } from '../engine/model-registry';
 import type { RoutingRequest } from '../engine/routing';
 import { describeModelCapabilitiesOrDefault, type ModelCapabilityFacts } from './model-agent';
+import { TASK_DEFS } from '../engine/task-vocabulary';
+import { migrateFormulaValues, sameShape } from '../engine/formula-migration';
+import { selfRefine } from './model-agent/self-refine';
+import { getDoctrine } from './doctrine-refresh';
 import type { FanModelSummary } from '../db';
 import { imageAgentSkills } from './skills';
 import { AGENT_MODELS, IMAGE_BRAIN_FALLBACK } from './model-config';
@@ -46,7 +50,7 @@ You OWN the image specs (the Operator handed only the brief):
 - aspectRatio: optional (e.g. "16:9" for a video-scene frame).
 - count: how many takes (default 2).
 - referenceRecommendation: 1–3 SHORT reference TYPES to attach for a precise result, tailored to the brief (e.g. "A character reference to keep the Camaro consistent", "A style reference for the era", "Start & end frames"). The exact reference COUNT the chosen model accepts is a fact supplied to you — never invent it.
-- parts: on a CONSULTATION (guided) leg, break the brief into the image FORMULA — Subject, Action, Context, Composition, Style. This is ITERATION ZERO of the user's prompt, so be faithful to what they ACTUALLY said. For each part give: id (lowercase), label, a one-line guidance (what the part is for), and:
+- parts: on a CONSULTATION (guided) leg, break the brief into the TARGET MODEL'S prompt FORMULA — the exact parts and order given in the PROMPT FORMULA block of your instructions (they differ per model; never substitute a generic five). This is ITERATION ZERO of the user's prompt, so be faithful to what they ACTUALLY said. For each part give: id (lowercase), label, a one-line guidance (what the part is for), and:
   • value = ONLY what the USER actually specified, decomposed into this part (e.g. "I want a car" → Subject value "a car"; Action/Context/etc. value ""). EMPTY if they didn't mention it. NEVER invent, expand, or put words in their mouth — that's what \`recommend\` is for.
   • recommend = YOUR suggested improvement for this part, rich and specific (e.g. Subject recommend "A modern sports car with glossy metallic paint and brushed-metal trim"). It shows as the field placeholder — a recommendation, not their words.
   • chips = 3–5 SUGGESTED quick-adds tailored to THIS subject (e.g. Style: "golden hour", "kodachrome", "grainy 35mm") — the user taps to APPEND; never a fixed menu.
@@ -117,7 +121,7 @@ const WORKSPACE_ACTION_TOOL = {
       parts: {
         type: 'array',
         description:
-          "When action='rebuild': fresh iteration-zero parts for the NEW subject — the same formula parts (subject/action/context/composition/style). Each: id, value (ONLY the user's actual words for the new subject, empty if unspecified — never invent), recommend (your suggestion → shown as placeholder), chips (3–5).",
+          "When action='rebuild': fresh iteration-zero parts for the NEW subject, using the SAME part ids as the current formula (they are the target model's documented parts — do not invent or rename them). Each: id, value (ONLY the user's actual words for the new subject, empty if unspecified — never invent), recommend (your suggestion → shown as placeholder), chips (3–5).",
         items: {
           type: 'object',
           properties: {
@@ -140,7 +144,7 @@ const COLLABORATE_SYSTEM = `\n\nWORKSPACE COLLABORATION: the user is shaping the
 - "edit" — they asked to change/improve/add to the prompt ("make it night", "stronger context", "add motion blur", "use the placeholders"). Return \`edits\`: only the parts to change, each with its FULL new value (rewrite the whole part). Do NOT render.
 - "render" — they EXPLICITLY asked to generate ("render it", "generate", "go", "make it now").
 - "answer" — a question or advice ("which lens?", "what's weak?"). Just answer in the spoken part; no edits, no render.
-- "rebuild" — they PIVOTED to a DIFFERENT subject entirely (was a jet, now "a car"), or want something the current parts can't represent. Provide the new \`subject\` and fresh \`parts\` (all formula parts, iteration zero: \`value\` = ONLY their actual words for the new subject, a \`recommend\`, and 3–5 \`chips\`). This RESETS the whole Prompt Guide to the new subject. Do NOT render.
+- "rebuild" — they PIVOTED to a DIFFERENT subject entirely (was a jet, now "a car"), or want something the current parts can't represent. Provide the new \`subject\` and fresh \`parts\` (ALL of the CURRENT formula's parts, same ids, iteration zero: \`value\` = ONLY their actual words for the new subject, a \`recommend\`, and 3–5 \`chips\`). This RESETS the whole Prompt Guide to the new subject. Do NOT render.
 Choosing edit vs rebuild: the SAME subject being tuned → edit; a genuinely NEW subject → rebuild.
 Only render when they clearly ask to. Editing, answering, or rebuilding NEVER renders. Honor their intent; don't render unless asked.`;
 
@@ -334,17 +338,19 @@ async function* streamFan(req: RoutingRequest, budgetUsd?: number): AsyncIterabl
   yield { type: 'gen_done', costUsd: cost };
 }
 
-/** Build the grounded capability highlights list from the Model agent's facts. Typed per-role
- *  limits (Gemini-3-style) render as "up to 6 object · 5 character · 3 style"; otherwise the flat pool. */
+/** Build the grounded capability highlights list from the Model agent's facts. Leads with the model's
+ *  REAL input channels ("Style references: 3 · Character reference: 1"), which is what actually decides
+ *  whether an attached reference does anything; falls back to the flat pool for unresearched models.
+ *  Then the tasks its OWN documentation evidences — professional vocabulary, never provider marketing. */
 function capabilityHighlights(f: ModelCapabilityFacts): string[] {
-  const rl = f.referenceLimits;
-  const refLine = rl
-    ? `Up to ${rl.object} object${rl.character ? ` · ${rl.character} character` : ''}${rl.style ? ` · ${rl.style} style` : ''} references`
-    : `Holds up to ${f.maxReferenceImages} reference image${f.maxReferenceImages === 1 ? '' : 's'}`;
-  const out: string[] = [refLine];
-  if (f.styleTransfer) out.push('Style-transfer variants');
-  if (f.multiReference) out.push('Multi-image compositing');
-  if (f.supportsEditing) out.push('Editing / inpaint');
+  const out: string[] = [f.inputSummary];
+  const native = f.features.filter((t) => t.support === 'native').slice(0, 4);
+  for (const t of native) out.push(TASK_DEFS[t.task].label);
+  if (native.length === 0) {
+    if (f.styleTransfer) out.push('Style-transfer variants');
+    if (f.multiReference) out.push('Multi-image compositing');
+    if (f.supportsEditing) out.push('Editing / inpaint');
+  }
   return out;
 }
 
@@ -371,16 +377,47 @@ function agentContentById(raw: unknown): Map<string, { value: string; recommend:
   return m;
 }
 
+/** The full distilled doctrine for a model, or null. Guarded — never blocks a render. */
+async function doctrineForModel(modelId: string) {
+  try {
+    const { getDb } = await import('../db');
+    return await getDoctrine(await getDb(), modelId);
+  } catch {
+    return null;
+  }
+}
+
+/** The TARGET MODEL'S formula, rendered for the agent's instructions. This is what stops the agent
+ *  from being told "Subject/Action/Context/Composition/Style" no matter which model it's writing for
+ *  — the parts it's asked to fill are now THAT model's real, documented parts (and, once distilled,
+ *  its own guide's assembly rule and doctrine principles ride along). */
+function formulaBrief(f: ModelCapabilityFacts): string {
+  const parts = f.formula.parts.map((p, i) => `${i + 1}. ${p.label} (id: ${p.id}) — ${p.guidance}`).join('\n');
+  const lines = [`PROMPT FORMULA for ${f.modelLabel} — fill EXACTLY these parts, in this order:`, parts];
+  if (f.formula.assembly) lines.push(`ASSEMBLY: ${f.formula.assembly}`);
+  if (f.formulaSource === 'doctrine') lines.push(`(This is ${f.modelLabel}'s OWN published formula, distilled from its documentation.)`);
+  const d = f.doctrine;
+  if (d?.principles?.length) lines.push(`WHAT THIS MODEL REWARDS:\n${d.principles.slice(0, 6).map((x) => `- ${x}`).join('\n')}`);
+  if (d?.antiPatterns?.length) lines.push(`WHAT IT PUNISHES:\n${d.antiPatterns.slice(0, 4).map((x) => `- ${x}`).join('\n')}`);
+  return lines.join('\n');
+}
+
 /** MODEL-DRIVEN builder parts: the STRUCTURE (which parts, labels, guidance, weight, order) comes
  *  from the target model's FORMULA; the CONTENT comes from the agent, matched by id — `value` is the
  *  user's ACTUAL words (iteration zero), `recommend` is the agent's suggestion (the placeholder). */
-function buildFormulaParts(formula: PromptFormula, raw: unknown, frame: EpistemicFrame): ImageBuilderPart[] {
+function buildFormulaParts(
+  formula: PromptFormula,
+  raw: unknown,
+  frame: EpistemicFrame,
+  carried?: Record<string, string>,
+): ImageBuilderPart[] {
   const content = agentContentById(raw);
   const subject = (frame.subject || frame.goal || '').trim();
   return formula.parts.map((fp) => {
     const c = content.get(fp.id);
-    // Seed Subject from the brief ONLY if the agent didn't decompose the user's words itself.
-    let value = c?.value ?? '';
+    // Precedence: the agent's own content for THIS part → a value carried over from a prior formula
+    // shape → the brief's subject. Nothing the user or agent wrote is dropped on a formula change.
+    let value = c?.value ?? carried?.[fp.id] ?? '';
     if (!value && fp.id === 'subject') value = subject;
     return {
       id: fp.id,
@@ -397,6 +434,9 @@ function buildFormulaParts(formula: PromptFormula, raw: unknown, frame: Epistemi
 /** A follow-up turn INSIDE the Image workspace (Option A — the workspace talks straight to the
  *  Image agent, no Operator re-diagnosis). Absent on the first leg (the transfer). */
 export interface ImageAgentTurn {
+  /** Index-aligned with `references` — what each attached image is FOR. Routed to the model's real
+   *  input channel by the reference planner; absent = every image is a plain reference. */
+  referenceRoles?: string[];
   /** The user's workspace instruction (e.g. "make it dusk", "wider shot", "more variations"). */
   userMessage?: string;
   /** Prior workspace turns for coherence. */
@@ -571,6 +611,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
       models: manualModels,
       aspectRatio: fanAspect,
       references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
+      referenceRoles: turn.references && turn.references.length > 0 ? turn.referenceRoles : undefined,
       budgetUsd: frame.budgetUsd,
     };
     yield { type: 'step', id: 'selecting', label: 'Selecting the model…', status: 'start' };
@@ -580,14 +621,33 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     return;
   }
 
+  // 0) PRE-GROUND (consult leg only): which model will serve this, and what is ITS formula? The agent
+  //    has to be TOLD the real parts before it writes them — otherwise it defaults to a generic five
+  //    and the model's own documented shape never reaches the builder. Routed from the frame (the
+  //    refined prompt doesn't exist yet); step 2b re-grounds on the final plan and migrates if the
+  //    shape changed, so a shift in target model never loses the agent's work.
+  const preFacts = followUp
+    ? null
+    : await describeModelCapabilitiesOrDefault({
+        intent: frame.goal,
+        needs: [],
+        count: frame.count,
+        fanModels: fanModelsN,
+        perModel: perModelN,
+        models: manualModels,
+        aspectRatio: fanAspect,
+        references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
+        budgetUsd: frame.budgetUsd,
+      });
+
   // 1) The Image agent's brain: brief (+ any follow-up) → render plan (opener text + plan_render
   //    tool call). Its craft (plan-then-generate, reference workflows, prompt formulas) is skills.
-  // A consult leg (the transfer landing) shows "Shaping the five parts…" in the reel; a render leg
-  // is "Composing your render…" — the workspace's honest milestone (it used to just shimmer here).
+  // A consult leg shows "Shaping the N prompt parts…" — N being THIS model's real part count, not a
+  // hardcoded five; a render leg is "Composing your render…".
   yield {
     type: 'step',
     id: 'shaping',
-    label: followUp ? 'Composing your render…' : 'Shaping the five prompt parts…',
+    label: followUp ? 'Composing your render…' : `Shaping the ${preFacts?.formula.parts.length ?? 5} prompt parts…`,
     status: 'start',
   };
   let plan: { prompt?: unknown; needs?: unknown; aspectRatio?: unknown; count?: unknown; referenceRecommendation?: unknown; parts?: unknown } = {};
@@ -598,12 +658,13 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
       userContent =
         `BRIEF (verified — start at Decide):\n${JSON.stringify(frame)}\n\n` +
         `This is the CONSULTATION (guided) leg: do NOT render — no images are generated now. Your opener is ONE ` +
-        `calm sentence (e.g. "Let's shape this — I've laid out the five parts in the Prompt Builder on the ` +
+        `calm sentence (e.g. "Let's shape this — I've laid out the parts in the Prompt Builder on the ` +
         `right; tune them and hit Render when it feels right"). Refer to the Prompt Builder, never "below". Never ` +
         `claiming you're rendering and NOT a long list of specs (the parts ARE the specs). In plan_render, fill ` +
-        `\`parts\` (the image FORMULA — Subject/Action/Context/Composition/Style, each with guidance + a value ` +
-        `pre-filled from the brief + 3–5 suggested chips) plus prompt + needs so the reference facts are grounded. ` +
-        `The user shapes the parts in the Prompt Builder and commits later.`;
+        `\`parts\` — the TARGET MODEL'S formula below, each with a value pre-filled from the brief + 3–5 suggested ` +
+        `chips — plus prompt + needs so the reference facts are grounded. ` +
+        `The user shapes the parts in the Prompt Builder and commits later.` +
+        (preFacts ? `\n\n${formulaBrief(preFacts)}` : '');
     } else {
       const parts = [
         `BRIEF (verified):\n${JSON.stringify(frame)}`,
@@ -663,6 +724,7 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     perModel: perModelN,
     models: manualModels,
     references: turn.references && turn.references.length > 0 ? turn.references : frame.assetRefs,
+    referenceRoles: turn.references && turn.references.length > 0 ? turn.referenceRoles : undefined,
     budgetUsd: frame.budgetUsd,
   };
 
@@ -682,7 +744,47 @@ export async function* runImageAgent(frame: EpistemicFrame, turn: ImageAgentTurn
     const facts = await describeModelCapabilitiesOrDefault(req);
     yield { type: 'step', id: 'grounding', status: 'done' };
     const formula = facts.formula;
-    const parts = buildFormulaParts(formula, plan.parts, frame);
+    // The agent wrote its parts against the PRE-GROUNDED formula. If routing landed on a model with a
+    // different documented shape (Gemini's Location vs xAI's Setting/Camera/Lighting/Mood), carry the
+    // written values across by MEANING rather than discarding them — never lose the work (see
+    // formula-migration.ts). Same shape → no-op.
+    let carried: Record<string, string> | undefined;
+    let carryNotes: string[] = [];
+    if (preFacts && !sameShape(preFacts.formula, formula)) {
+      const priorValues = buildFormulaParts(preFacts.formula, plan.parts, frame).map((p) => ({ id: p.id, label: p.label, value: p.value }));
+      const migrated = migrateFormulaValues(priorValues, formula);
+      carried = migrated.values;
+      carryNotes = migrated.notes;
+    }
+    let parts = buildFormulaParts(formula, plan.parts, frame, carried);
+    for (const note of carryNotes) yield { type: 'gen_notice', message: note };
+
+    // SELF-REFINEMENT — apply the target model's OWN doctrine to this draft before the user sees it.
+    // Iteration zero used to ship straight to the builder however it came out, with the craft critique
+    // sitting behind a button the user had to know to press. Now the agent grades its own work against
+    // the model's published guide and fixes what it can, so the conversation STARTS higher. It never
+    // touches the user's words (this is the first leg — every value here is the agent's own), and any
+    // failure is a silent no-op that leaves the draft exactly as drafted.
+    if (facts.doctrine) {
+      yield { type: 'step', id: 'refining', label: `Checking it against ${facts.modelLabel.split('(')[0].trim()}'s guide…`, status: 'start' };
+      try {
+        const refined = await selfRefine({
+          modelId: facts.modelId,
+          modelLabel: facts.modelLabel,
+          formula,
+          parts: parts.map((p) => ({ id: p.id, label: p.label, guidance: p.guidance, value: p.value })),
+          doctrine: await doctrineForModel(facts.modelId),
+        });
+        if (refined.edits.length > 0) {
+          const byId = new Map(refined.edits.map((e) => [e.id, e]));
+          parts = parts.map((p) => (byId.has(p.id) ? { ...p, value: byId.get(p.id)!.value } : p));
+          if (refined.summary) yield { type: 'gen_notice', message: refined.summary };
+        }
+      } catch {
+        /* refinement is an enhancement, never a gate — the draft stands as written */
+      }
+      yield { type: 'step', id: 'refining', status: 'done' };
+    }
     const subject = (frame.subject || frame.goal || 'the subject').trim();
     yield {
       type: 'agent_a2ui',

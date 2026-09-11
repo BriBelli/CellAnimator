@@ -14,6 +14,9 @@ export type IconName =
   | 'check'
   | 'chevron-down'
   | 'search'
+  | 'book-open-check'
+  | 'graduation-cap'
+  | 'book-copy'
   | 'settings'
   | 'copy'
   | 'save'
@@ -66,6 +69,27 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="m21 21-4.34-4.34" />
       <circle cx="11" cy="11" r="8" />
+    </>
+  ),
+  'book-open-check': (
+    <>
+      <path d="M12 5v16" />
+      <path d="m16 12 2 2 4-4" />
+      <path d="M22 6V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2h4.001A2 2 0 0022 17v-1.344" />
+    </>
+  ),
+  'graduation-cap': (
+    <>
+      <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z" />
+      <path d="M22 10v6" />
+      <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" />
+    </>
+  ),
+  'book-copy': (
+    <>
+      <path d="M5 7a2 2 0 0 0-2 2v11" />
+      <path d="M5.803 18H5a2 2 0 0 0 0 4h9.5a.5.5 0 0 0 .5-.5V21" />
+      <path d="M9 15V4a2 2 0 0 1 2-2h9.5a.5.5 0 0 1 .5.5v14a.5.5 0 0 1-.5.5H11a2 2 0 0 1 0-4h10" />
     </>
   ),
   settings: (
