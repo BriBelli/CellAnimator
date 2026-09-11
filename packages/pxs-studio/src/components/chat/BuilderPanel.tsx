@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { Button, Icon, IconButton } from '../ui';
 import type { A2UIBuilderBlock } from '../../store/chat-turns-store';
 import { bandLabel, STRUCTURE_CAP, type ScoreBand, type BuilderScore } from '../../lib/prompt-score';
+import { PromptString } from './PromptString';
 import type { CraftResult } from '../../lib/agents/model-agent/craft-critique';
 import type { CraftRollup } from '../../lib/agents/model-agent/craft-rollup';
 import type { CompiledPrompt } from '../../lib/engine/prompt-compile';
@@ -63,6 +64,8 @@ export interface BuilderPanelProps {
   rollup?: CraftRollup | null;
   /** Revert a diverged lens back to the shared brief. */
   onRevertLens?: (modelId: string) => void;
+  /** Focus a part from the prose view (click a phrase → jump to its field). */
+  onEditPart?: (id: string) => void;
   /** Update a part's value (the single source of truth lives in ChatView). */
   onValueChange: (id: string, value: string) => void;
   /** The Agent's most recent part edit (the COUPLING) — flashes + scrolls that part into view. */
@@ -101,6 +104,14 @@ const CSS = `
 .pxc-review { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 
 .pxc-part-head { display: flex; align-items: center; gap: var(--a2ui-space-2); }
+.pxc-viewtoggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px;
+  border: 1px solid var(--pxs-border-subtle, var(--a2ui-border)); background: var(--a2ui-bg-secondary); }
+.pxc-viewtoggle button { padding: 3px 10px; border: none; background: none; border-radius: 6px;
+  font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); cursor: pointer; }
+.pxc-viewtoggle button[data-on='true'] { background: var(--a2ui-bg-tertiary, rgba(255,255,255,0.07)); color: var(--a2ui-text-primary); }
+.pxc-prose { margin: var(--a2ui-space-3) 0; }
+/* The prose lives in a ~380px panel now, not a 760px overlay — let it breathe and reflow. */
+.pxc-prose .pxc-ps { font-size: var(--a2ui-text-md); line-height: 1.7; }
 .pxc-lens-strip { display: flex; gap: var(--a2ui-space-2); overflow-x: auto; padding: 2px 2px var(--a2ui-space-2);
   margin: var(--a2ui-space-3) 0 var(--a2ui-space-2); scrollbar-width: none; }
 .pxc-lens-strip::-webkit-scrollbar { display: none; }
@@ -285,8 +296,26 @@ function QualityRing({ value, band }: { value: number; band: ScoreBand }) {
 export function BuilderPanel({
   block, values, score, craft, onCritique, onCritiqueAll, critiquing, lenses, activeLensId,
   onSelectLens, lensScores, rollup, onRevertLens, onValueChange, highlight, onRender, busy,
-  initialRefs, budgetBlock,
+  initialRefs, budgetBlock, onEditPart,
 }: BuilderPanelProps) {
+  /**
+   * PROSE ↔ BUILD — two views of ONE document, never two panels.
+   *
+   * The parts and the assembled sentence edit the same values and bind to the same store: they are
+   * the same prompt in structured and prose form. Showing both at once was the clutter, and the prose
+   * form used to float OVER the canvas — so the workspace covered the images it exists to display.
+   *
+   * PROSE IS THE DEFAULT. Of the three surfaces here, two are natural language: the Agent panel (for
+   * instruction — "make it dusk") and this (the document itself). Typing prose into five small boxes
+   * is the awkward one, and reading the prompt as one string is what a person actually wants to check
+   * before spending. Structure stays legible because each part keeps its colour.
+   *
+   * BUILD is the lens you enter to work a specific part with its guidance, chips and score — the
+   * craft scaffolding, reached deliberately rather than imposed permanently.
+   */
+  const [view, setView] = useState<'build' | 'prose'>('prose');
+  /** Which field has the caret — guidance shows for THAT part only. */
+  const [focusedPart, setFocusedPart] = useState<string | null>(null);
   // Values are CONTROLLED (owned by ChatView, shared with the center prompt). A chip APPENDS to the
   // field (comma-joined, de-duped); typing edits directly. The recommendation is the placeholder.
   const [refs, setRefs] = useState<string[]>(() => initialRefs ?? []);
@@ -374,12 +403,18 @@ export function BuilderPanel({
             band={craft?.available ? (craft.score >= 80 ? 'strong' : craft.score >= 55 ? 'good' : 'thin') : score.overallBand}
           />
           <div>
-            <div className="pxc-build-score-title">{craft?.available ? 'Prompt craft' : 'Prompt structure'}</div>
+            <div className="pxc-build-score-title" title={craft?.available ? undefined : `Structure only — the craft review can exceed ${STRUCTURE_CAP}`}>
+              {craft?.available ? 'Craft' : 'Structure'}
+            </div>
             <div className="pxc-build-score-sub">
               {craft?.available
                 ? `Judged against ${craft.modelLabel.split('(')[0].trim()}'s guide`
-                : `${bandLabel(score.overallBand)} · ${score.filled}/${score.total} parts · structure only (max ${STRUCTURE_CAP})`}
+                : `${bandLabel(score.overallBand)} · ${score.filled}/${score.total} parts`}
             </div>
+          </div>
+          <div className="pxc-viewtoggle" role="group" aria-label="Prompt view">
+            <button type="button" data-on={view === 'prose'} onClick={() => setView('prose')}>Prompt</button>
+            <button type="button" data-on={view === 'build'} onClick={() => setView('build')}>Parts</button>
           </div>
           {onCritique && (
             <div className="pxc-review">
@@ -599,11 +634,33 @@ export function BuilderPanel({
             </div>
           )}
           {block.model && block.model.supports.length > 0 && (
-            <div className="pxc-build-supports">Supports: {block.model.supports.join(' · ')}</div>
+            /* Capability detail is REACHABLE, not RESIDENT — it was a permanent paragraph of dense
+               text for something you consult once. */
+            <div className="pxc-build-supports" title={block.model.supports.join(' · ')}>
+              {block.model.supports.length} capabilities
+            </div>
           )}
         </div>
 
-        {block.parts.map((part) => {
+        {view === 'prose' && (
+          <div className="pxc-prose">
+            <PromptString
+              parts={block.parts}
+              values={values}
+              score={score}
+              onValueChange={onValueChange}
+              onEditPart={(id) => {
+                // Clicking a phrase takes you to ITS field with the guidance showing — the prose is
+                // the way in, the parts are where you refine.
+                setView('build');
+                setFocusedPart(id);
+                onEditPart?.(id);
+              }}
+            />
+          </div>
+        )}
+
+        {view === 'build' && block.parts.map((part) => {
           // Recommendation = the PLACEHOLDER; chips not already in the value are still offered.
           const suggestions = part.chips.filter((c) => !hasChip(part.id, c));
           return (
@@ -614,7 +671,7 @@ export function BuilderPanel({
                   {bandOfPart(part.id)}
                 </span>
               </div>
-              {part.guidance && <div className="pxc-part-guide">{part.guidance}</div>}
+              {part.guidance && focusedPart === part.id && <div className="pxc-part-guide">{part.guidance}</div>}
               <textarea
                 id={`pxc-field-${part.id}`}
                 className="pxc-part-field"
@@ -622,6 +679,8 @@ export function BuilderPanel({
                 value={values[part.id] ?? ''}
                 placeholder={part.recommend || `Describe the ${part.label.toLowerCase()}…`}
                 onChange={(e) => onValueChange(part.id, e.target.value)}
+                onFocus={() => setFocusedPart(part.id)}
+                onBlur={() => setFocusedPart((f) => (f === part.id ? null : f))}
                 // TAB on an empty field accepts the recommendation (the placeholder) — the seed of
                 // type-ahead / IntelliSense. Non-empty fields Tab normally (move focus).
                 onKeyDown={(e) => {
@@ -644,8 +703,9 @@ export function BuilderPanel({
           );
         })}
 
+        {budgetBlock && <div className="pxc-build-blocked">{budgetBlock}</div>}
         <div className="pxc-build-foot">
-          <Button variant="primary" size="md" type="button" disabled={!canRender} onClick={() => onRender(assemble(), refs)}>
+          <Button variant="primary" size="md" type="button" disabled={!canRender} onClick={() => onRender(assemble(), refs, refRoles)}>
             <Icon name="sparkles" size={15} /> Render
           </Button>
         </div>

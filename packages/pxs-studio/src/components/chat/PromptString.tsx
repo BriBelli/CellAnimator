@@ -119,7 +119,7 @@ export function PromptString({ parts, values, score, onValueChange }: PromptStri
     <div className="pxc-ps">
       <style>{CSS}</style>
       {!anyFilled ? (
-        <div className="pxc-ps-empty">Describe what to create, or fill the parts in Build — they assemble here.</div>
+        <div className="pxc-ps-empty">Describe what to create — or shape it part by part under Parts, and it assembles here.</div>
       ) : (
         <div className="pxc-ps-line">
           {parts.map((p, i) => (
