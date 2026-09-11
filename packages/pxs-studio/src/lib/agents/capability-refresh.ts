@@ -2,8 +2,9 @@
  * Capability refresh — run the grounded research across ALL models and persist the SOURCED facts as
  * seed_override ModelCards, which composeCatalog then overlays onto the hand-typed seed. This is the
  * loop that keeps the registry accurate on its own: the agent reads each model's docs, extracts what
- * the sources state (with provenance), and only applies medium/high-confidence results (low stays seed
- * — honest). No hand-typing, no hand-correcting.
+ * the sources state (with provenance) — hard capability limits AND the ranking axes (strengths/tier/
+ * bestFor) — and only applies medium/high-confidence results (low stays seed — honest). No hand-typing,
+ * no hand-correcting: the seed is a bootstrap floor, the research pass is the authority.
  */
 
 import type { Repository } from '../db/repository';
@@ -42,9 +43,18 @@ async function refreshOne(
 
   const patch: Partial<ImageModel> = {};
   if (typeof r.maxReferenceImages === 'number') patch.maxReferenceImages = r.maxReferenceImages;
+  if (r.referenceLimits) patch.referenceLimits = r.referenceLimits;
+  // The model's REAL input channels — structural truth about how references are passed, researched
+  // rather than approximated onto a Gemini-shaped {object,character,style} triple.
+  if (r.inputSlots) patch.inputSlots = r.inputSlots;
   if (typeof r.supportsEditing === 'boolean') patch.supportsEditing = r.supportsEditing;
   if (Array.isArray(r.capabilities) && r.capabilities.length > 0) patch.capabilities = r.capabilities as Capability[];
   if (Array.isArray(r.aspectRatios) && r.aspectRatios.length > 0) patch.aspectRatios = r.aspectRatios;
+  // The RANKING AXES — researched, never hand-typed. This is what keeps selection autonomous:
+  // strengths/tier/bestFor come from live quality sources and overlay the seed via composeCatalog.
+  if (r.strengths) patch.strengths = r.strengths;
+  if (r.tier) patch.tier = r.tier;
+  if (Array.isArray(r.bestFor) && r.bestFor.length > 0) patch.bestFor = r.bestFor;
 
   const applied = r.confidence !== 'low' && Object.keys(patch).length > 0;
   if (applied) {

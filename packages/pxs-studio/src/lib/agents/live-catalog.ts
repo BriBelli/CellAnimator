@@ -11,16 +11,17 @@
  * selection.
  */
 
-import { IMAGE_MODELS, type ImageModel } from '../engine/model-registry';
+import { IMAGE_MODELS, isPruned, type ImageModel } from '../engine/model-registry';
 import { overlayFreshness, loadRefreshState } from './model-refresh-runner';
 import type { Repository } from '../db/repository';
 import type { ModelCard } from '../db/models';
 
 export const SYSTEM_USER_ID = 'system';
 
-/** Load all model cards, keyed by model_id. */
+/** Load the ACTIVE model cards, keyed by model_id. A card marked `deleted` is soft-removed: it
+ *  leaves the catalog and becomes eligible for clean re-discovery, without destroying the record. */
 export async function loadCards(repo: Repository): Promise<Map<string, ModelCard>> {
-  const res = await repo.query({ category: 'model_card', user_id: SYSTEM_USER_ID });
+  const res = await repo.query({ category: 'model_card', user_id: SYSTEM_USER_ID, filter: { status: 'active' } });
   const map = new Map<string, ModelCard>();
   for (const c of res.items as ModelCard[]) map.set(c.model_id, c);
   return map;
@@ -55,15 +56,18 @@ export function composeCatalog(
   );
   if (patches.size > 0) catalog = catalog.map((m) => (patches.has(m.id) ? { ...m, ...patches.get(m.id) } : m));
 
-  // 3. Append discovered+researched models that aren't already present.
+  // 3. Append discovered+researched models that aren't already present. A card with `card: null` is
+  //    a RECORDED REJECTION (not an image model, or a deliberately-pruned model found live again) —
+  //    knowledge we keep so it isn't re-researched, but never something we route to.
   const seen = new Set(catalog.map((m) => m.id));
   for (const c of cards.values()) {
     if (c.origin !== 'discovered' || !c.card) continue;
     const model = c.card as ImageModel;
-    if (model?.id && !seen.has(model.id)) {
-      catalog.push(model);
-      seen.add(model.id);
-    }
+    if (!model?.id || seen.has(model.id)) continue;
+    // Last line of defence: a pruned id can never re-enter the catalog through a stale card.
+    if (isPruned(model.id) || isPruned(model.providerModelId ?? '')) continue;
+    catalog.push(model);
+    seen.add(model.id);
   }
   return catalog;
 }

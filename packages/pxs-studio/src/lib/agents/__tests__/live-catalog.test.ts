@@ -62,9 +62,9 @@ test('composeCatalog: a discovered card is appended and routable', () => {
 });
 
 test('composeCatalog: a retired seed model is filtered out (reversibly)', () => {
-  const cards = new Map([['nano-banana', retiredCard('nano-banana')]]);
+  const cards = new Map([['gemini-3-pro-image', retiredCard('gemini-3-pro-image')]]);
   const out = composeCatalog(IMAGE_MODELS, emptyState, cards);
-  assert.equal(out.some((m) => m.id === 'nano-banana'), false);
+  assert.equal(out.some((m) => m.id === 'gemini-3-pro-image'), false);
   assert.equal(out.length, IMAGE_MODELS.length - 1);
 });
 

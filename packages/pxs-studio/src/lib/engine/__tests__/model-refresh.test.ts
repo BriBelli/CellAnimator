@@ -93,14 +93,15 @@ test('providersDue: only active providers WITH an endpoint AND a stale model', (
   const farFuture = Date.parse('2027-01-01T00:00:00Z'); // everything stale
   const due = providersDue(PROVIDERS, IMAGE_MODELS, farFuture);
   const ids = due.map((p) => p.id).sort();
-  // google (gemini models) + openai (gpt-image-1) have endpoints + stale models.
+  // google/openai/replicate/xai have endpoints + stale image models in the catalog.
   assert.ok(ids.includes('google'));
   assert.ok(ids.includes('openai'));
+  assert.ok(ids.includes('replicate'));
   // ideogram/recraft/fal have models but NO modelsEndpoint → never structurally due.
   assert.ok(!ids.includes('ideogram'));
   assert.ok(!ids.includes('recraft'));
-  // replicate/anthropic have endpoints but no image models in the catalog → not due.
-  assert.ok(!ids.includes('replicate'));
+  // anthropic has an endpoint but no image models in the catalog → not due.
+  assert.ok(!ids.includes('anthropic'));
 });
 
 test('providersDue: nothing due when records are fresh', () => {
@@ -113,14 +114,14 @@ test('providersDue: nothing due when records are fresh', () => {
 test('runRegistryRefresh: reconciles due providers via injected fetch, skips unreachable ones', async () => {
   const farFuture = Date.parse('2027-01-01T00:00:00Z');
   const fetchLive = async (p: { id: string }): Promise<LiveModel[] | null> => {
-    if (p.id === 'google') return [{ id: 'gemini-2.5-flash-image' }, { id: 'gemini-9-new' }];
+    if (p.id === 'google') return [{ id: 'gemini-3-pro-image' }, { id: 'gemini-9-new' }];
     return null; // openai unreachable this pass
   };
   const results = await runRegistryRefresh(IMAGE_MODELS, { now: farFuture, fetchLive });
   // Only google produced a diff (openai returned null → skipped, stays due next pass).
   assert.equal(results.length, 1);
   assert.equal(results[0].provider, 'google');
-  assert.ok(results[0].confirmed.includes('nano-banana'));
+  assert.ok(results[0].confirmed.includes('gemini-3-pro-image'));
   assert.ok(results[0].discovered.some((d) => d.id === 'gemini-9-new'));
 });
 

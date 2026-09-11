@@ -53,3 +53,40 @@ export async function tavilySearch(query: string, opts: { maxResults?: number } 
     return [];
   }
 }
+
+export interface ExtractedPage {
+  url: string;
+  /** The page's FULL extracted content — the grounding text for doctrine distillation. */
+  content: string;
+}
+
+/**
+ * Fetch the FULL content of specific pages (Tavily /extract). This is the doctrine pass's reader:
+ * search snippets (~1500 chars) are fine for discovering facts, but prompt DOCTRINE lives in whole
+ * documents — a prompting guide can't be distilled from a snippet. Returns only pages that yielded
+ * content; [] on any failure or missing key (research degrades to snippet-grade, never crashes).
+ */
+export async function tavilyExtract(urls: string[]): Promise<ExtractedPage[]> {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key || urls.length === 0) return [];
+  try {
+    const res = await fetch('https://api.tavily.com/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: key, urls: urls.slice(0, 10) }),
+    });
+    if (!res.ok) {
+      console.warn(`[tavily] extract ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+      return [];
+    }
+    const data = (await res.json().catch(() => null)) as {
+      results?: Array<{ url?: string; raw_content?: string }>;
+    } | null;
+    return (data?.results ?? [])
+      .filter((r) => typeof r.url === 'string' && typeof r.raw_content === 'string' && r.raw_content.length > 0)
+      .map((r) => ({ url: r.url as string, content: r.raw_content as string }));
+  } catch (err) {
+    console.warn('[tavily] extract failed:', err);
+    return [];
+  }
+}

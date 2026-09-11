@@ -7,7 +7,7 @@
  * research candidates, and FLAGS (never auto-retires) curated models it can't find.
  *
  * Why conservative? A provider's live id ('gemini-2.5-flash-image-preview') rarely equals our
- * registry slug ('nano-banana'), and matching is fuzzy. Auto-retiring on a missed string-match would
+ * registry slug, and matching is fuzzy. Auto-retiring on a missed string-match would
  * silently delete curated craft; auto-adding raw ids would fill the catalog with unvetted routes.
  * So the deterministic pass only does what's SAFE — confirm, discover, flag — and leaves the
  * judgment calls (enrich a discovered model, retire a vanished one) to the maintenance agent.
@@ -23,7 +23,7 @@ import { isDueForRefresh, DEFAULT_TTL_HOURS } from './staleness';
 
 /** A model as a provider's live listing reports it (normalized across provider response shapes). */
 export interface LiveModel {
-  /** The provider's canonical model id (e.g. 'gemini-2.5-flash-image', 'gpt-image-1'). */
+  /** The provider's canonical model id (e.g. 'gemini-3-pro-image', 'gpt-image-1.5'). */
   id: string;
   /** Human display name where the provider gives one. */
   label?: string;

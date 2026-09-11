@@ -19,10 +19,12 @@ import type { ModelRefreshRecord } from '../../db/models';
 
 const NOW = Date.parse('2027-01-01T00:00:00Z'); // far past the seed's 2026-07-06 → everything stale
 
-/** Covers the two providers that have both an endpoint and image models: google + openai. */
+/** Covers every provider that has both an endpoint and image models: google, openai, replicate, xai. */
 const fetchBoth = async (p: { id: string }): Promise<LiveModel[] | null> => {
-  if (p.id === 'google') return [{ id: 'gemini-2.5-flash-image' }, { id: 'gemini-9-new', label: 'Gemini 9' }];
-  if (p.id === 'openai') return [{ id: 'gpt-image-1' }];
+  if (p.id === 'google') return [{ id: 'gemini-3-pro-image' }, { id: 'gemini-3.1-flash-image' }, { id: 'gemini-9-new', label: 'Gemini 9' }];
+  if (p.id === 'openai') return [{ id: 'gpt-image-1.5' }];
+  if (p.id === 'replicate') return [{ id: 'black-forest-labs/flux-2-pro' }, { id: 'black-forest-labs/flux-2-dev' }];
+  if (p.id === 'xai') return [{ id: 'grok-imagine-image-2.0' }];
   return null;
 };
 
@@ -30,16 +32,18 @@ test('refreshRegistry: reconciles due providers and PERSISTS the diff', async ()
   const repo = createMemoryRepository();
   const summary = await refreshRegistry(repo, { now: NOW, fetchLive: fetchBoth });
 
-  assert.deepEqual([...summary.providersChecked].sort(), ['google', 'openai']);
+  assert.deepEqual([...summary.providersChecked].sort(), ['google', 'openai', 'replicate', 'xai']);
   assert.equal(summary.discoveredCount, 1); // gemini-9-new
 
   const state = await loadRefreshState(repo);
   const google = state.get('google') as ModelRefreshRecord;
   assert.ok(google);
   assert.equal(google.checked_at, NOW);
-  assert.ok(google.confirmed.includes('nano-banana'));
+  assert.ok(google.confirmed.includes('gemini-3-pro-image'));
+  assert.ok(google.confirmed.includes('gemini-3.1-flash-image'));
   assert.ok(google.discovered.some((d) => d.id === 'gemini-9-new'));
-  assert.equal(state.get('openai')?.confirmed.includes('gpt-image-1'), true);
+  assert.equal(state.get('openai')?.confirmed.includes('gpt-image-1.5'), true);
+  assert.equal(state.get('xai')?.confirmed.includes('grok-imagine-image-2.0'), true);
 });
 
 test('overlayFreshness: persisted checked_at overrides the older seed stamp, seed untouched', () => {
@@ -62,16 +66,16 @@ test('overlayFreshness: persisted checked_at overrides the older seed stamp, see
     ],
   ]);
   const effective = overlayFreshness(IMAGE_MODELS, state);
-  const nano = effective.find((m) => m.id === 'nano-banana')!;
-  assert.equal(nano.sourceRefreshedAt, '2027-01-01');
-  // Seed const not mutated.
-  const seedNano = IMAGE_MODELS.find((m) => m.id === 'nano-banana')!;
-  assert.equal(seedNano.sourceRefreshedAt, '2026-07-06');
+  const pro = effective.find((m) => m.id === 'gemini-3-pro-image')!;
+  assert.equal(pro.sourceRefreshedAt, '2027-01-01');
+  // Seed const not mutated (the seed stamp is the record's live-verified date).
+  const seedPro = IMAGE_MODELS.find((m) => m.id === 'gemini-3-pro-image')!;
+  assert.equal(seedPro.sourceRefreshedAt, '2026-08-24');
 });
 
 test('refreshRegistryIfDue: after a pass, nothing is due → skips with NO network', async () => {
   const repo = createMemoryRepository();
-  // First pass makes google + openai fresh.
+  // First pass makes every image provider fresh.
   await refreshRegistry(repo, { now: NOW, fetchLive: fetchBoth });
 
   // A network fn that would THROW if called — proves the skip path never touches it.
@@ -90,7 +94,8 @@ test('refreshRegistryIfDue: after a pass, nothing is due → skips with NO netwo
 
 test('refreshRegistryIfDue: fresh DB (nothing checked yet) with a fresh clock → skip', async () => {
   const repo = createMemoryRepository();
-  // A "now" one hour after the seed refresh date → seed is fresh → nothing due.
+  // A "now" one hour after the OLDEST seed stamp (the gemini 3.x preview records) → every record is
+  // fresh (the 2026-08-24-verified ones trivially so) → nothing due.
   const res = await refreshRegistryIfDue(repo, Date.parse('2026-07-06T01:00:00Z'));
   assert.deepEqual(res, { skipped: true });
 });

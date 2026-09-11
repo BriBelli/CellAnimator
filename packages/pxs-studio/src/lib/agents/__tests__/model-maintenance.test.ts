@@ -13,6 +13,7 @@ import {
   toImageModel,
   slugId,
   parseResearch,
+  obviouslyNotAnImageModel,
   type Discovery,
   type ResearchedModel,
 } from '../model-maintenance';
@@ -77,35 +78,35 @@ test('a research miss (null) persists no card', async () => {
 
 test('ghost: retires only after repeated-miss evidence, then drops from the catalog', async () => {
   const repo = createMemoryRepository();
-  await seedRefresh(repo, 'google', { unconfirmed: ['nano-banana'] });
+  await seedRefresh(repo, 'google', { unconfirmed: ['gemini-3-pro-image'] });
 
   const p1 = await runMaintenance(repo, { now: NOW, research });
-  assert.deepEqual(p1.incremented, ['nano-banana']);
+  assert.deepEqual(p1.incremented, ['gemini-3-pro-image']);
   assert.equal(p1.retired.length, 0);
   const p2 = await runMaintenance(repo, { now: NOW + 1, research });
   assert.equal(p2.retired.length, 0);
   const p3 = await runMaintenance(repo, { now: NOW + 2, research });
-  assert.deepEqual(p3.retired, ['nano-banana']); // threshold 3 reached
+  assert.deepEqual(p3.retired, ['gemini-3-pro-image']); // threshold 3 reached
 
   // A retired seed model is filtered from the live catalog (reversibly).
   const catalog = await getLiveCatalog(repo);
-  assert.equal(catalog.some((m) => m.id === 'nano-banana'), false);
+  assert.equal(catalog.some((m) => m.id === 'gemini-3-pro-image'), false);
 });
 
 test('ghost RESET: a retired model that reappears live is un-retired and returns to the catalog', async () => {
   const repo = createMemoryRepository();
-  await seedRefresh(repo, 'google', { unconfirmed: ['nano-banana'] });
+  await seedRefresh(repo, 'google', { unconfirmed: ['gemini-3-pro-image'] });
   // Age it to retirement.
   await runMaintenance(repo, { now: NOW, research });
   await runMaintenance(repo, { now: NOW + 1, research });
   await runMaintenance(repo, { now: NOW + 2, research });
-  assert.equal((await getLiveCatalog(repo)).some((m) => m.id === 'nano-banana'), false);
+  assert.equal((await getLiveCatalog(repo)).some((m) => m.id === 'gemini-3-pro-image'), false);
 
   // Now the refresh confirms it again.
-  await seedRefresh(repo, 'google', { confirmed: ['nano-banana'], unconfirmed: [] });
+  await seedRefresh(repo, 'google', { confirmed: ['gemini-3-pro-image'], unconfirmed: [] });
   const reset = await runMaintenance(repo, { now: NOW + 3, research });
-  assert.deepEqual(reset.reset, ['nano-banana']);
-  assert.ok((await getLiveCatalog(repo)).some((m) => m.id === 'nano-banana'), 'model is back after reappearing');
+  assert.deepEqual(reset.reset, ['gemini-3-pro-image']);
+  assert.ok((await getLiveCatalog(repo)).some((m) => m.id === 'gemini-3-pro-image'), 'model is back after reappearing');
 });
 
 test('parseResearch: tolerant JSON, defaults bad confidence to low, rejects junk', () => {
@@ -116,4 +117,124 @@ test('parseResearch: tolerant JSON, defaults bad confidence to low, rejects junk
   assert.equal(bad?.confidence, 'low');
   assert.equal(parseResearch('no json here'), null);
   assert.equal(parseResearch('{"brief":"missing label"}'), null);
+});
+
+// ── DISCOVERY GUARDRAILS ─────────────────────────────────────────────────────────────────────────
+// Regressions here are expensive and silent. Observed live (2026-08-25) with these absent: a
+// provider listing dumped 99 non-image models into the catalog — object detectors, text embeddings,
+// moderation models — and an OpenAI realtime SPEECH model was carded as a tier-3 IMAGE model whose
+// own researched brief said it wasn't one. Both then got re-researched on every pass, burning an
+// hour of API calls on "how many reference images does YOLO accept".
+
+test('a discovery the research says is NOT an image model is refused, not carded as one', async () => {
+  const repo = createMemoryRepository();
+  await seedRefresh(repo, 'openai', { discovered: [{ id: 'gpt-realtime-2025-08-28' }] });
+
+  const summary = await runMaintenance(repo, {
+    now: NOW,
+    research: async () => ({
+      isImageModel: false,
+      label: 'GPT Realtime',
+      brief: "OpenAI's realtime speech-to-speech model. Not an image or video generation model.",
+      confidence: 'high',
+    }),
+  });
+
+  assert.deepEqual(summary.researched, []);
+  assert.deepEqual(summary.rejected, ['gpt-realtime-2025-08-28']);
+  // And it must never appear in the catalog the router selects from.
+  const catalog = await getLiveCatalog(repo);
+  assert.equal(catalog.some((m) => m.id === 'gpt-realtime-2025-08-28'), false);
+});
+
+test('a deliberately PRUNED model found live again is not resurrected', async () => {
+  const repo = createMemoryRepository();
+  await seedRefresh(repo, 'google', { discovered: [{ id: 'gemini-2.5-flash-image' }] });
+
+  let researchCalls = 0;
+  const summary = await runMaintenance(repo, {
+    now: NOW,
+    research: async () => {
+      researchCalls++;
+      return { isImageModel: true, label: 'Gemini 2.5 Flash Image', brief: 'legacy', confidence: 'high' };
+    },
+  });
+
+  assert.deepEqual(summary.rejected, ['gemini-2.5-flash-image']);
+  assert.equal(researchCalls, 0, 'a pruned id is refused BEFORE paying to research it');
+  const catalog = await getLiveCatalog(repo);
+  assert.equal(catalog.some((m) => m.id === 'gemini-2.5-flash-image'), false);
+});
+
+test('discovery research is BOUNDED per pass — a 90-model listing cannot become 90 LLM calls', async () => {
+  const repo = createMemoryRepository();
+  const many = Array.from({ length: 40 }, (_, i) => ({ id: `discovered-model-${i}` }));
+  await seedRefresh(repo, 'openai', { discovered: many });
+
+  let researchCalls = 0;
+  const summary = await runMaintenance(repo, {
+    now: NOW,
+    maxResearchPerPass: 5,
+    research: async () => {
+      researchCalls++;
+      return { isImageModel: true, label: 'X', brief: 'x', confidence: 'high' };
+    },
+  });
+
+  assert.equal(researchCalls, 5);
+  assert.equal(summary.researched.length, 5);
+  assert.equal(summary.discoveriesSeen, 40); // the rest are SEEN and roll into the next pass
+});
+
+test('rejections are recorded so the same non-image model is never researched twice', async () => {
+  const repo = createMemoryRepository();
+  await seedRefresh(repo, 'openai', { discovered: [{ id: 'sonic-2-turbo' }] }); // ambiguous → costs research once
+  let calls = 0;
+  const deps = {
+    now: NOW,
+    research: async () => {
+      calls++;
+      return { isImageModel: false, label: 'Sonic 2', brief: 'A speech synthesis model.', confidence: 'high' as const };
+    },
+  };
+  await runMaintenance(repo, deps);
+  await runMaintenance(repo, { ...deps, now: NOW + 86_400_000 });
+  assert.equal(calls, 1, 'the verdict is remembered, not re-purchased every pass');
+});
+
+test('obviouslyNotAnImageModel: rejects the junk for FREE, never a real image model', () => {
+  // The exact ids that polluted the catalog on 2026-08-25.
+  for (const id of [
+    'text-embedding-3-large', 'text-embedding-ada-002', 'omni-moderation-latest',
+    'ultralytics-yolo11n', 'ultralytics-yolo26-seg', 'gpt-realtime-2025-08-28',
+    'whisper-large-v3', 'gpt-4o-mini-tts',
+  ]) {
+    assert.equal(obviouslyNotAnImageModel(id), true, `${id} should be rejected free`);
+  }
+  // And it must NEVER veto a real image model — the cost of a false positive is a missing model.
+  for (const id of [
+    'gpt-image-1.5', 'black-forest-labs/flux-2-pro', 'gemini-3-pro-image',
+    'gemini-2.5-flash-image', 'grok-imagine-image-2.0', 'recraftv3', 'ideogram-v3',
+    'stability-ai/sdxl', 'google/imagen-4', 'prunaai-z-image-turbo',
+  ]) {
+    assert.equal(obviouslyNotAnImageModel(id), false, `${id} must reach research`);
+  }
+});
+
+test('the pre-filter spends NO research call on obvious junk', async () => {
+  const repo = createMemoryRepository();
+  await seedRefresh(repo, 'openai', {
+    discovered: [{ id: 'text-embedding-3-large' }, { id: 'ultralytics-yolo26' }, { id: 'some-new-image-model' }],
+  });
+  let calls = 0;
+  const summary = await runMaintenance(repo, {
+    now: NOW,
+    research: async () => {
+      calls++;
+      return { isImageModel: true, label: 'New', brief: 'a real one', confidence: 'high' as const };
+    },
+  });
+  assert.equal(calls, 1, 'only the ambiguous id costs a research call');
+  assert.equal(summary.rejected.length, 2);
+  assert.deepEqual(summary.researched, ['some-new-image-model']);
 });

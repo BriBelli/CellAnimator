@@ -24,6 +24,7 @@ import {
   type BatchStrategy,
 } from '../engine/model-registry';
 import { getProvider, registryTag } from '../engine/provider-roster';
+import { isPruned, PRUNED_MODEL_IDS } from '../engine/model-registry';
 import { loadRefreshState } from './model-refresh-runner';
 import { loadCards, SYSTEM_USER_ID } from './live-catalog';
 import type { Repository } from '../db/repository';
@@ -31,6 +32,37 @@ import type { ModelCard, ModelRefreshRecord } from '../db/models';
 
 const MODEL = AGENT_MODELS.maintenance;
 const DEFAULT_RETIRE_THRESHOLD = 3;
+
+/**
+ * OBVIOUSLY-NOT-AN-IMAGE-MODEL id patterns — a free pre-filter before any paid research.
+ *
+ * Provider listings are mostly other things: a single sweep surfaced 99 non-image models (object
+ * detectors, text embeddings, moderation, speech, realtime). The `isImageModel` research gate catches
+ * them correctly, but at one LLM call each — and re-costs on every provider that adds models. These
+ * patterns are unambiguous enough to reject for free.
+ *
+ * Deliberately CONSERVATIVE: it must never reject a real image model. Anything ambiguous falls
+ * through to research, which is the accurate (paid) answer. 'image'/'img' anywhere in the id vetoes
+ * the filter entirely, so e.g. `gpt-image-1.5` can never be caught by the `gpt-` family patterns.
+ */
+const NOT_IMAGE_PATTERNS: RegExp[] = [
+  /(^|[-_/])embed(ding)?s?([-_]|$)/,
+  /(^|[-_/])moderation([-_]|$)/,
+  /(^|[-_/])(whisper|tts|speech|voice|audio|realtime|transcribe|translate)([-_]|$)/,
+  /(^|[-_/])(rerank|reranker|classifier|classification)([-_]|$)/,
+  /(^|[-_/])yolo/,
+  /(^|[-_/])(sam|segment|detect|detection|depth|pose|ocr|upscaler?)([-_]|$)/,
+  /(^|[-_/])(chat|instruct|reasoning|coder?)([-_]|$)/,
+  /(^|[-_/])(guard|safety)([-_]|$)/,
+];
+
+/** Cheap, conservative "this is definitely not an image generator" check. */
+export function obviouslyNotAnImageModel(liveId: string): boolean {
+  const id = liveId.toLowerCase();
+  // Any id that advertises imagery is never rejected for free — research decides.
+  if (/(image|img|photo|picture|render|diffusion|flux|dalle|dall-e|imagen|sdxl)/.test(id)) return false;
+  return NOT_IMAGE_PATTERNS.some((re) => re.test(id));
+}
 
 /** A model the refresh worker discovered live, awaiting research. */
 export interface Discovery {
@@ -44,6 +76,11 @@ export interface Discovery {
 export interface ResearchedModel {
   label: string;
   brief: string;
+  /** Is this actually an IMAGE GENERATION model? A provider's model listing is full of chat, audio,
+   *  embedding and realtime models; without this gate they get researched into the image catalog and
+   *  become routable (observed: an OpenAI realtime SPEECH model landed as a tier-3 image model whose
+   *  own brief said it wasn't one). False → recorded as known-and-rejected, never routed. */
+  isImageModel?: boolean;
   tier?: 1 | 2 | 3;
   capabilities?: string[];
   supportsEditing?: boolean;
@@ -57,6 +94,10 @@ export interface ResearchedModel {
 
 export interface MaintenanceDeps {
   now: number;
+  /** Max discoveries to research in ONE pass. A provider listing can carry 90+ unseen ids (chat,
+   *  audio, embeddings…); researching them all in a single request is minutes of LLM calls holding
+   *  a connection open. Uncarded discoveries simply roll into the next pass. */
+  maxResearchPerPass?: number;
   research: (d: Discovery) => Promise<ResearchedModel | null>;
   /** Consecutive misses before a ghost retires. Default 3. */
   retireThreshold?: number;
@@ -69,6 +110,8 @@ export interface MaintenanceSummary {
   incremented: string[]; // ghosts that gained a miss but aren't retired yet
   reset: string[]; // ghosts cleared because the model reappeared live
   discoveriesSeen: number;
+  /** Discoveries refused (non-image models, pruned resurrections) — reported, not silent. */
+  rejected: string[];
   ghostsSeen: number;
 }
 
@@ -152,18 +195,68 @@ export async function runMaintenance(repo: Repository, deps: MaintenanceDeps): P
 
   // DISCOVERIES: research the ones not already carded (dedup live ids within the pass too).
   const researched: string[] = [];
+  /** Discoveries refused: not image models, or deliberately-pruned models found live again. */
+  const rejected: string[] = [];
   let discoveriesSeen = 0;
   const cardedThisPass = new Set<string>();
+  const researchBudget = deps.maxResearchPerPass ?? 5;
+  let researchSpent = 0;
   for (const rec of state.values()) {
     for (const d of rec.discovered) {
       discoveriesSeen++;
+      if (researchSpent >= researchBudget) continue; // rolls into the next pass
       const slug = slugId(d.id);
       if (cards.has(slug) || cardedThisPass.has(slug)) continue;
+
+      // FREE rejections first — pruned resurrections and ids that are plainly not image generators.
+      // Both are carded so the verdict is remembered and never re-purchased.
+      const prunedHit = isPruned(slug) || isPruned(d.id);
+      const notImageHit = !prunedHit && obviouslyNotAnImageModel(d.id);
+      if (prunedHit || notImageHit) {
+        await putCard(repo, {
+          id: `model_card:${slug}`,
+          created_at: now,
+          updated_at: now,
+          model_id: slug,
+          provider: rec.provider,
+          card: null,
+          origin: 'discovered',
+          confidence: 'high',
+          researched_at: now,
+          source: prunedHit
+            ? `deliberately pruned: ${PRUNED_MODEL_IDS[slug] ?? 'removed from the roster'}`
+            : 'not an image generation model (id pattern) — rejected without spending research',
+        });
+        cardedThisPass.add(slug);
+        rejected.push(slug);
+        continue;
+      }
+
       let model: ImageModel | null = null;
       let confidence: ResearchedModel['confidence'] = 'low';
       let source: string | undefined;
+      researchSpent++;
       try {
         const r = await deps.research({ provider: rec.provider, liveId: d.id, label: d.label });
+        if (r && r.isImageModel === false) {
+          // The research says this isn't an image model at all (chat / audio / realtime / embedding).
+          // Record the verdict so we never pay to research it again, and never route to it.
+          await putCard(repo, {
+            id: `model_card:${slug}`,
+            created_at: now,
+            updated_at: now,
+            model_id: slug,
+            provider: rec.provider,
+            card: null,
+            origin: 'discovered',
+            confidence: r.confidence,
+            researched_at: now,
+            source: `not an image model: ${r.brief?.slice(0, 160) ?? ''}`,
+          });
+          cardedThisPass.add(slug);
+          rejected.push(slug);
+          continue;
+        }
         if (r) {
           model = toImageModel(r, { provider: rec.provider, liveId: d.id, label: d.label }, now);
           confidence = r.confidence;
@@ -220,7 +313,7 @@ export async function runMaintenance(repo: Repository, deps: MaintenanceDeps): P
     (willRetire ? retired : incremented).push(modelId);
   }
 
-  return { ranAt: now, researched, retired, incremented, reset, discoveriesSeen, ghostsSeen: ghostIds.size };
+  return { ranAt: now, researched, rejected, retired, incremented, reset, discoveriesSeen, ghostsSeen: ghostIds.size };
 }
 
 // ── Real research via Claude (injected in tests) ─────────────────────────────────────────────────
@@ -229,10 +322,11 @@ const RESEARCH_SYSTEM = `You are Pixcel's model-research specialist. Given a gen
 (its provider, docs URL, and id), produce a CONSERVATIVE capability record as JSON.
 
 Rules:
+- FIRST decide "isImageModel": is this an IMAGE GENERATION / image EDITING model? Provider listings are mostly chat, audio, speech, realtime, embedding, moderation and video models — those are all false. If it is not an image model, set "isImageModel":false and stop caring about the rest (a one-line brief is enough). Getting this wrong puts a non-image model into image routing.
 - Only assert what you're reasonably confident about from the id/provider/your knowledge. NEVER fabricate specifics.
 - If you're unsure, set "confidence":"low" and omit fields you can't support. Low confidence keeps the model out of live routing until a human/better pass confirms it — that's the safe default.
 - Output ONE JSON object, no prose, matching:
-{"label":string,"brief":string,"tier":1|2|3,"capabilities":string[],"supportsEditing":boolean,"maxReferenceImages":number,"costPerImageUsd":[number,number],"aspectRatios":string[],"strengths":{"photorealism":0-5,...},"confidence":"low"|"medium"|"high","source":string}
+{"isImageModel":boolean,"label":string,"brief":string,"tier":1|2|3,"capabilities":string[],"supportsEditing":boolean,"maxReferenceImages":number,"costPerImageUsd":[number,number],"aspectRatios":string[],"strengths":{"photorealism":0-5,...},"confidence":"low"|"medium"|"high","source":string}
 Valid capabilities: text_in_image, editing, multi_reference, photorealism, vector, high_resolution, fast, cheap.`;
 
 function extractText(msg: Anthropic.Message): string {
@@ -265,7 +359,7 @@ export async function researchWithClaude(d: Discovery, client?: Anthropic): Prom
   try {
     const params = {
       model: MODEL,
-      max_tokens: 800,
+      max_tokens: 4000, // a full model record with brief + capabilities; 800 truncated it
       thinking: { type: 'adaptive' },
       system: RESEARCH_SYSTEM,
       messages: [

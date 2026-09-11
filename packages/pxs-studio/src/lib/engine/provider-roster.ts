@@ -163,9 +163,16 @@ export const PROVIDERS: Provider[] = [
     label: 'fal',
     envKey: 'FAL_API_KEY',
     docsUrl: 'https://fal.ai/models',
+    modelsEndpoint: 'https://fal.ai/api/models?keywords=',
     modalities: ['image', 'video'],
-    status: 'dropped',
-    note: 'Dropped unless specifically required (avoid juggling). NOTE: the current image registry still routes Flux via fal — re-activate or migrate those routes to Replicate/BFL before removing.',
+    status: 'active',
+    note:
+      'ACTIVE and primary for VIDEO: Seedance, Kling and Happy Horse all render through it, and it ' +
+      'publishes an OpenAPI schema per endpoint (which is how several adapter bugs were caught before ' +
+      'they shipped). It was marked "dropped" from the original roster while simultaneously being the ' +
+      'only route to three working models — the sweep skipped it on that basis, which is why Seedance ' +
+      '2.5 went unnoticed. NOTE: its endpoint is a KEYWORD SEARCH, not a full listing, so it is swept ' +
+      'per model family (see model-succession).',
   },
 ];
 
