@@ -84,7 +84,9 @@ export interface BuilderPanelProps {
 
 const CSS = `
 .pxc-build { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: var(--a2ui-space-6); background: var(--a2ui-bg-app); }
-.pxc-build-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
+.pxc-build-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--a2ui-space-3);
+  /* Clear the sticky Render footer — it was overlapping the last field. */
+  padding-bottom: var(--a2ui-space-8); }
 .pxc-build-title { font-size: var(--a2ui-text-lg); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary); letter-spacing: -0.01em; margin-bottom: var(--a2ui-space-1); }
 .pxc-build-title span { color: var(--a2ui-text-tertiary); font-weight: var(--a2ui-font-normal); }
 
@@ -110,6 +112,10 @@ const CSS = `
   font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); cursor: pointer; }
 .pxc-viewtoggle button[data-on='true'] { background: var(--a2ui-bg-tertiary, rgba(255,255,255,0.07)); color: var(--a2ui-text-primary); }
 .pxc-prose { margin: var(--a2ui-space-3) 0; }
+.pxc-howto { margin: var(--a2ui-space-2) 0 var(--a2ui-space-4); padding: var(--a2ui-space-3) var(--a2ui-space-4);
+  border-radius: 10px; border: 1px dashed var(--pxs-border-subtle, var(--a2ui-border));
+  font-size: var(--a2ui-text-sm); color: var(--a2ui-text-tertiary); line-height: 1.55; }
+.pxc-howto strong { color: var(--a2ui-text-secondary); font-weight: var(--a2ui-font-semibold); }
 /* The prose lives in a ~380px panel now, not a 760px overlay — let it breathe and reflow. */
 .pxc-prose .pxc-ps { font-size: var(--a2ui-text-md); line-height: 1.7; }
 .pxc-lens-strip { display: flex; gap: var(--a2ui-space-2); overflow-x: auto; padding: 2px 2px var(--a2ui-space-2);
@@ -642,6 +648,13 @@ export function BuilderPanel({
           )}
         </div>
 
+        {view === 'build' && block.parts.every((p) => !(values[p.id] ?? '').trim()) && (
+          <div className="pxc-howto">
+            Describe what you want to the <strong>Agent</strong> on the right — it breaks your
+            description into these parts, and you tune them here.
+          </div>
+        )}
+
         {view === 'prose' && (
           <div className="pxc-prose">
             <PromptString
@@ -671,7 +684,9 @@ export function BuilderPanel({
                   {bandOfPart(part.id)}
                 </span>
               </div>
-              {part.guidance && focusedPart === part.id && <div className="pxc-part-guide">{part.guidance}</div>}
+              {part.guidance && (focusedPart === part.id || !(values[part.id] ?? '').trim()) && (
+                <div className="pxc-part-guide">{part.guidance}</div>
+              )}
               <textarea
                 id={`pxc-field-${part.id}`}
                 className="pxc-part-field"
