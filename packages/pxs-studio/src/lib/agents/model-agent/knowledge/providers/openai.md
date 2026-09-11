@@ -20,10 +20,7 @@ Second primary. Best-in-class multi-subject composition + complex prompt adheren
 
 ## Models
 ### Image
-- **GPT Image 1 (OpenAI)** (`gpt-image-1`) — OpenAI flagship. Best-in-class prompt adherence, in-image text, and editing (native images.edit with up to 4 references). Slower + pricier; reach for it on hero images, anything with legible text, and multi-turn edits. Native batch up to n=10. _[tier 3 · refs 4, 5 aspect ratios]_
-
-### Video
-- **Sora 2 (OpenAI)** (`sora-2`) — OpenAI cinematic video — long-form coherence, physical realism, strong world simulation. Route narrative sequences. _[tier 3 · needs-research · native-audio · ≤20s, 720p/1080p]_
+- **GPT Image 1.5 (OpenAI)** (`gpt-image-1.5`) — OpenAI flagship (GPT Image 1.5, Dec 2025 — built into the GPT-5 stack, ~4x faster than gpt-image-1). Best-in-class prompt adherence, in-image text, and editing: images.edit accepts up to 16 input images. Reach for it on hero images, legible text, and multi-turn edits. Native batch up to n=10. Verified 2026-08-24 (OpenAI API reference). _[tier 3 · refs 16, 5 aspect ratios]_
 
 _Live connection health is tracked separately in `state/health.json` (not here — this file is durable
 knowledge, not runtime state)._

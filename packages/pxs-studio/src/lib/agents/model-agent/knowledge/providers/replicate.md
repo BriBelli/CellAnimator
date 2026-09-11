@@ -20,12 +20,8 @@ Access layer for Flux (dev), open-source specialty, and TV-MA / uncensored model
 
 ## Models
 ### Image
-- **FLUX1.1 Pro (Replicate)** (`flux-1.1-pro`) — Black Forest Labs FLUX1.1 Pro via Replicate (BFL direct is dropped — Replicate is the Flux route). Fast, photoreal, huge style range at a flat ~$0.05/image. The default workhorse for rich illustrated / photoreal looks. Weak at in-image text and has no real edit path — route text/edits to gpt-image-1. _[tier 3 · refs 1, 6 aspect ratios]_
-- **FLUX.1 dev (Replicate)** (`flux-dev`) — The cheap, fast FLUX for wide exploration and big fan-outs (~$0.01/image). Quality is a notch under Pro; ideal for "show me 8 directions" before committing to a flagship render. _[tier 1 · refs 1, 5 aspect ratios]_
-
-### Video
-- **Kling 3.0 Pro (Replicate)** (`kling-3-pro`) — Strong motion + character consistency, image-to-video start frames. Route action + dance + expressive motion. _[tier 2 · needs-research · ≤10s, 720p/1080p]_
-- **Seedance 2.0 (Replicate)** (`seedance-2`) — Fast, stylized, multi-shot sequences. Route quick iterations + stylized looks. _[tier 2 · needs-research · ≤10s, 480p/720p/1080p]_
+- **FLUX.2 [pro] (Replicate)** (`flux-2-pro`) — Black Forest Labs FLUX.2 [pro] via Replicate — photoreal flagship with true MULTI-REFERENCE: composes/edits from up to 8 reference images, index-addressable ("the person from image 1 in the outfit from image 4"), strong character + product consistency. Verified 2026-08-24 from the Replicate model page. Route heavy in-image text to gpt-image-1 / ideogram. _[tier 3 · refs 8, 9 aspect ratios]_
+- **FLUX.2 [dev] (Replicate)** (`flux-2-dev`) — Black Forest Labs FLUX.2 [dev] via Replicate — the affordable FLUX.2, same MULTI-REFERENCE stack (up to 8 refs + editing) at a fraction of pro cost. Great for reference-driven fan-outs and exploration. Verified 2026-08-24 from Replicate. _[tier 2 · refs 8, 9 aspect ratios]_
 
 ### Audio
 - **MusicGen (Replicate)** (`musicgen`) — Open music + SFX generation, fast + cheap. Route quick beds, loops, and sound effects. _[tier 1 · needs-research · music/sfx, ≤30s]_

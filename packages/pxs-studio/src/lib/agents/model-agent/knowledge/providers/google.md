@@ -20,14 +20,12 @@ The backbone. Full-suite emphasis (Codex primary directive) — Gemini image, Ve
 
 ## Models
 ### Image
-- **Nano Banana (Gemini 2.5 Flash Image)** (`nano-banana`) — Google Gemini 2.5 Flash Image. Exceptional at conversational multi-image editing, character consistency, and blending several references into one scene at a flat ~$0.039. First pick for compositing and inserting a person/object into an existing scene. _[tier 2 · refs 3, 5 aspect ratios]_
-- **Gemini 3 Pro Image** (`gemini-3-pro-image`) — Gemini 3 Pro Image — the flagship of the family. Distinct reference pools: up to 6 object refs (high-fidelity), 5 character refs (consistency), and 3 style refs. First pick when a shot needs precise, typed references held together. _[tier 3 · preview · refs 14, 7 aspect ratios]_
-- **Gemini 3.1 Flash Image** (`gemini-3.1-flash-image`) — Gemini 3.1 Flash Image — fast, high-multi-reference. Up to 10 object refs + 4 character refs (no dedicated style pool). Strong for compositing many objects quickly with character consistency. _[tier 2 · preview · refs 14, 5 aspect ratios]_
-- **Gemini 3.1 Flash Lite Image** (`gemini-3.1-flash-lite-image`) — Gemini 3.1 Flash Lite Image — cheapest, fastest of the family. Up to 14 object refs (no character/style pools). Best for high-object compositing on a budget; not for character consistency. _[tier 1 · preview · refs 14, 5 aspect ratios]_
+- **Nano Banana Pro (Gemini 3 Pro Image)** (`gemini-3-pro-image`) — Nano Banana Pro (gemini-3-pro-image, GA May 2026) — the family flagship. Distinct reference pools, 14 total: up to 10 object refs (high-fidelity), 5 character refs (consistency), and 3 style refs. $0.134/img at 1K-2K, $0.24 at 4K. First pick when a shot needs precise, typed references held together. Verified 2026-08-24 (ai.google.dev docs + pricing). _[tier 3 · refs 14, 7 aspect ratios]_
+- **Nano Banana 2 (Gemini 3.1 Flash Image)** (`gemini-3.1-flash-image`) — Nano Banana 2 (gemini-3.1-flash-image, Feb 2026) — the fast tier with real quality: high multi-reference (coherence across ~14 objects / 5 characters per DeepMind) at $0.045-$0.15 by resolution. Per-role reference split not published where we can verify — the research pass owns sourcing it. Verified 2026-08-24 (pricing + API id). _[tier 2 · refs 14, 5 aspect ratios]_
 - **Gemini Omni (Google)** (`gemini-omni`) — Native multimodal — interleaved image + audio in one context (the unified renderer). Confirm live span before routing; today a reasoning-forward Omni exemplar. _[tier 3 · omni: image+audio · needs-research]_
 
 ### Video
-- **Veo 3.1 (Google)** (`veo-3.1`) — Google flagship video — strong physics + prompt adherence, NATIVE synced audio in one pass (the unified renderer). Route hero shots and dialogue. _[tier 3 · needs-research · native-audio · ≤8s, 720p/1080p]_
+- **Veo 3.1 (Google)** (`veo-3.1`) — Google Veo 3.1 (Mar 2026) — the realism + native-audio flagship: synced dialogue, ambience and SFX in ONE pass at 48kHz, 1080p with 4K upscaling. SCENE EXTENSION chains up to 20 clips for 140s+ narratives, and frames-to-video interpolates between a start and end image — both of which matter more than clip length for film work. Family: quality / fast / lite. Every output carries a mandatory SynthID watermark. Verified 2026-08-29. _[tier 3 · needs-research · native-audio · ≤8s, 720p/1080p/4K]_
 
 ### Audio
 - **Lyria 2 (Google)** (`lyria-2`) — Google music generation — high-fidelity instrumental + song scoring. Route film score + music beds. _[tier 3 · needs-research · music, ≤120s]_

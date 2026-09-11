@@ -19,7 +19,7 @@ The vector specialist — native SVG, brand style sets (ties the vector-space sc
 
 ## Models
 ### Image
-- **Recraft V3** (`recraft-v3`) — Recraft V3 — the design/vector specialist. Native SVG + brand-consistent style sets. First pick for logos, icon sets, and flat vector illustration where clean scalable output matters (ties into the vector-space scope). _[tier 2 · refs 1, 5 aspect ratios]_
+- **Recraft V4.1** (`recraft-v4.1`) — Recraft V4.1 (May 2026) — the design/vector specialist, and the Recraft API's DEFAULT model. Native editable SVG via the _vector variants, brand-consistent style sets, cleaner icons and vectors by default. V4.1 reads intent more naturally, so shorter prompts land better. $0.035 raster / $0.08 vector. First pick for logos, icon sets, and flat vector illustration. Verified 2026-08-28 (recraft.ai API reference); replaces V3 (Oct 2024). _[tier 2 · refs 1, 5 aspect ratios]_
 
 _Live connection health is tracked separately in `state/health.json` (not here — this file is durable
 knowledge, not runtime state)._

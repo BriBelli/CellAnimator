@@ -38,7 +38,8 @@ export type RecordCategory =
   | 'user'
   | 'asset'
   | 'model_refresh'
-  | 'model_card';
+  | 'model_card'
+  | 'model_doctrine';
 
 /** Fields carried by EVERY record, regardless of category. Timestamps are ms epoch. */
 export interface BaseRecord {
@@ -286,6 +287,27 @@ export interface ModelCard extends BaseRecord {
   source?: string;
 }
 
+/**
+ * A model's distilled PROMPT DOCTRINE — the knowledge layer above the numbers. Produced by the
+ * doctrine pass: the model's PINNED official docs (API reference + prompting guide) are fetched in
+ * FULL and distilled by the research brain into the model's real formula, principles, anti-patterns,
+ * and task patterns — with provenance. This is what makes the Prompt Guide real instead of shallow:
+ * guidance grounded in the model's own published guide, never the LLM's memory.
+ * Id is stable: `model_doctrine:<model_id>`. System-scoped.
+ */
+export interface ModelDoctrineRecord extends BaseRecord {
+  category: 'model_doctrine';
+  /** The registry model id this doctrine is for (matches ImageModel.id). */
+  model_id: string;
+  provider: string;
+  /** The distilled ModelDoctrine (typed in agents/model-agent/doctrine.ts); null when distillation failed. */
+  doctrine: unknown | null;
+  confidence: 'low' | 'medium' | 'high';
+  distilled_at: number;
+  /** The pinned docs ingested, with a content hash per source — unchanged docs skip re-distillation. */
+  sources: { url: string; kind: string; content_hash?: string }[];
+}
+
 /** Union of every stored record shape. */
 export type AnyRecord =
   | Thread
@@ -295,7 +317,8 @@ export type AnyRecord =
   | UserRecord
   | Asset
   | ModelRefreshRecord
-  | ModelCard;
+  | ModelCard
+  | ModelDoctrineRecord;
 
 /** Stamped on every stored a2ui snapshot so the renderer can version-gate (Decision 4). */
 export const A2UI_VERSION = 'a2ui-v1';
