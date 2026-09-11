@@ -1,5 +1,6 @@
 'use client';
 
+import type { BudgetState } from '../lib/db/usage';
 import { create } from 'zustand';
 import { DEV_USER_ID } from '../lib/db/models';
 import type { Asset, Interaction } from '../lib/db/models';
@@ -8,6 +9,48 @@ import type { Source } from '../components/chat/SourcesRow';
 
 /** localStorage key holding the active thread id so a reload can restore the conversation. */
 export const THREAD_STORAGE_KEY = 'pxs-chat-thread';
+
+/** localStorage key for BUILDER DRAFTS — the user's in-progress prompt work, keyed by turn id.
+ *
+ *  Why this exists: `partValues` used to be re-seeded from the persisted block on every load, so a
+ *  reload silently reverted every field the user had typed since the agent laid the parts out — and
+ *  per-model lens overrides had no home at all. Work the user did must survive a refresh; anything
+ *  less is a tool that eats your input. The block stays the agent's iteration-zero (the baseline we
+ *  seed FROM); this holds the human's edits on top, plus any diverged lenses. */
+const BUILDER_DRAFT_KEY = 'pxs.builder.drafts';
+/** Keep the most recent N turns' drafts — bounded so localStorage can't grow without limit. */
+const DRAFT_LIMIT = 20;
+
+export interface BuilderDraft {
+  /** The shared brief's values, keyed by part id. */
+  values: Record<string, string>;
+  /** Deliberate per-model overrides: model id → part id → value (a diverged lens). */
+  overrides: Record<string, Record<string, string>>;
+  /** For eviction ordering. */
+  at: number;
+}
+
+function loadDrafts(): Record<string, BuilderDraft> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(BUILDER_DRAFT_KEY);
+    return raw ? ((JSON.parse(raw) as Record<string, BuilderDraft>) ?? {}) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDraft(turnId: string, draft: BuilderDraft): void {
+  if (typeof window === 'undefined' || !turnId) return;
+  try {
+    const all = loadDrafts();
+    all[turnId] = draft;
+    const entries = Object.entries(all).sort((a, b) => (b[1]?.at ?? 0) - (a[1]?.at ?? 0)).slice(0, DRAFT_LIMIT);
+    window.localStorage.setItem(BUILDER_DRAFT_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    /* quota/private mode — non-fatal, the session still works */
+  }
+}
 
 /** localStorage key for the fan-out picker config, so the user's models/count/images/aspect choices
  *  survive a reload (they were resetting to the default every refresh — the '1/ea' bug). */
@@ -20,10 +63,14 @@ function loadFanConfig(): FanConfig {
     const raw = window.localStorage.getItem(FAN_CONFIG_KEY);
     if (!raw) return { ...FAN_CONFIG_DEFAULT };
     const p = JSON.parse(raw) as Partial<FanConfig>;
+    const mode = p.mode === 'manual' ? 'manual' : 'auto';
+    const models = Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === 'string') : [];
     return {
-      mode: p.mode === 'manual' ? 'manual' : 'auto',
-      models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === 'string') : [],
-      fanModels: typeof p.fanModels === 'number' ? Math.max(1, p.fanModels) : 3,
+      mode,
+      models,
+      // In manual the count must EQUAL the selection: an older persisted config could carry a smaller
+      // cap, which would silently drop models the picker shows as checked.
+      fanModels: mode === 'manual' && models.length > 0 ? models.length : typeof p.fanModels === 'number' ? Math.max(1, p.fanModels) : 3,
       perModel: typeof p.perModel === 'number' ? Math.max(1, p.perModel) : 1,
       aspect: typeof p.aspect === 'string' ? p.aspect : undefined,
     };
@@ -273,9 +320,20 @@ interface ChatTurnsState {
    *  picks the top-N; 'manual' = fan across exactly `models`. `perModel` = images each. Shared so the
    *  picker, the composer, and the Render button all read/write one source. */
   fanConfig: FanConfig;
+  /** The user's live spend budget (cap · spent · remaining). Null until first loaded. Every surface
+   *  that can spend reads THIS, so the cost warning and the gate can never disagree. */
+  budget: BudgetState | null;
+  /** Refresh the budget from the server (after a render, or on mount). */
+  loadBudget: () => Promise<void>;
+  /** Set the user's own cap. Returns an error string when refused, else null. */
+  setSpendCap: (capUsd: number) => Promise<string | null>;
   /** SHARED builder part values — the single source for the Build panel AND the center prompt
    *  (two-way binding), AND what the Agent writes to via `part_edit` (the COUPLING). Keyed by part id. */
   partValues: Record<string, string>;
+  /** Diverged LENS values: model id → part id → value. A lens is a view of the shared brief until
+   *  the user deliberately overrides it for one model; then that model keeps its own value for those
+   *  parts only. Persisted with the draft — an override the user set must survive a reload. */
+  lensOverrides: Record<string, Record<string, string>>;
   /** Which builder turn `partValues` is seeded for (re-seed only on a NEW builder). */
   partSeedTurn: string | null;
   /** The Agent's most recent part edit — drives the Build panel highlight/ring animation. `n` bumps
@@ -283,6 +341,10 @@ interface ChatTurnsState {
   lastEdit: { id: string; n: number } | null;
   /** Set/edit a part value (user typing, chip tap, or an agent `part_edit`). */
   setPartValue: (id: string, value: string, fromAgent?: boolean) => void;
+  /** Override one part for ONE model (diverge that lens). */
+  setLensOverride: (modelId: string, partId: string, value: string) => void;
+  /** Drop a model's overrides — back in sync with the shared brief. Always available (never a cage). */
+  revertLens: (modelId: string) => void;
   /** Seed the shared values from a new builder's iteration-zero (no-op if already seeded for it). */
   seedBuilder: (turnId: string, seed: Record<string, string>) => void;
   /** Send a prompt — appends a new turn and streams its response. Returns the new turn id.
@@ -294,7 +356,10 @@ interface ChatTurnsState {
     builder?: { parts: { id: string; label: string; value: string }[] },
     /** Aligned with `references` by index — the saved-asset id for @-mentioned refs (null = a new
      *  upload). Lets the generation link lineage to the REAL asset instead of a duplicate. */
-    referenceAssetIds?: (string | null)[]
+    referenceAssetIds?: (string | null)[],
+    /** Aligned with `references` by index — what each image is FOR ('character' | 'style' | 'object'
+     *  | 'general'). Routed to the model's real input channel by the reference planner. */
+    referenceRoles?: string[]
   ) => string;
   /** Restore a persisted conversation from the SQLite store (reload/reopen hydration). */
   loadThread: (threadId: string) => Promise<void>;
@@ -326,6 +391,9 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     id: string,
     prompt: string,
     references: string[] = [],
+    // What each reference is FOR, index-aligned. Optional and additive: absent = every image is a
+    // plain reference, which is exactly the previous behaviour.
+    referenceRoles: string[] | undefined = undefined,
     builder?: { parts: { id: string; label: string; value: string }[] },
     referenceAssetIds?: (string | null)[]
   ) {
@@ -344,14 +412,34 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     // Option A routing: while in a workspace WITH an active frame, follow-ups talk STRAIGHT to the
     // Image agent (no Operator re-diagnosis). Otherwise the Operator front door handles the turn.
     const st = get();
-    const toImageAgent = st.activeMedium !== 'chat' && st.activeFrame != null;
+    const inWorkspace = st.activeMedium !== 'chat' && st.activeFrame != null;
+    // VIDEO GETS ITS OWN SPECIALIST. Until now every workspace turn went to /api/image-agent, so a
+    // shot was planned as though it were a picture and the video doctrine, formulas and task
+    // vocabulary were read by nothing. The medium decides the specialist.
+    const toVideoAgent = inWorkspace && st.activeMedium === 'video';
+    const toImageAgent = inWorkspace && !toVideoAgent;
 
     try {
-      const res = await fetch(toImageAgent ? '/api/image-agent' : '/api/chat-turn', {
+      const endpoint = toVideoAgent ? '/api/video-agent' : toImageAgent ? '/api/image-agent' : '/api/chat-turn';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          toImageAgent
+          toVideoAgent
+            ? {
+                prompt,
+                thread_id: st.threadId ?? undefined,
+                // A render leg carries the shaped prompt; a consultation leg carries only the brief.
+                ...(builder ? { render_prompt: prompt } : {}),
+                shot: {
+                  // The fan config's model/count choices apply to video exactly as they do to images.
+                  models: st.fanConfig.mode === 'manual' ? st.fanConfig.models : undefined,
+                  fanModels: st.fanConfig.fanModels,
+                  perModel: st.fanConfig.perModel,
+                  aspectRatio: st.fanConfig.aspect,
+                },
+              }
+            : toImageAgent
             ? {
                 prompt,
                 history,
@@ -359,6 +447,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                 frame: st.activeFrame,
                 section: st.activeMedium,
                 references, // attached reference images (data URLs) for the Image agent
+                ...(referenceRoles && referenceRoles.length > 0 ? { reference_roles: referenceRoles } : {}),
                 reference_asset_ids: referenceAssetIds, // aligned with references — existing saved-asset ids (lineage)
                 builder, // present → COLLABORATION: the agent can edit the parts, not just render
                 fan: st.fanConfig, // the picker/config: which models, how many, images each, aspect
@@ -543,6 +632,28 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
                 };
               }),
             }));
+          } else if (evt.type === 'clip') {
+            // A video clip landed. It rides the SAME gallery array as images so the stage, viewer,
+            // asset-saving and fan bookkeeping all work unchanged — the tile decides how to play it
+            // from the URL, rather than the whole pipeline forking on medium.
+            set((s) => ({
+              turns: s.turns.map((t) =>
+                t.id === id
+                  ? {
+                      ...t,
+                      images: [
+                        ...t.images,
+                        { url: evt.url, modelId: evt.modelId, modelLabel: evt.modelLabel || '', index: t.images.length },
+                      ],
+                      fan: t.fan?.map((f) =>
+                        (evt.modelId ? f.modelId === evt.modelId : f.label === evt.modelLabel)
+                          ? { ...f, delivered: f.delivered + 1 }
+                          : f,
+                      ),
+                    }
+                  : t,
+              ),
+            }));
           } else if (evt.type === 'image') {
             // A generated tile arrived — append it (streamed gallery) + tick its model's delivered
             // count (matched by id, label as the fallback for older streams).
@@ -654,17 +765,70 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
     activeFrame: null,
     viewMode: 'chat',
     fanConfig: loadFanConfig(),
+    budget: null,
+    loadBudget: async () => {
+      try {
+        const res = await fetch('/api/budget');
+        if (res.ok) set({ budget: (await res.json()) as BudgetState });
+      } catch {
+        /* a missing budget must never block the app — surfaces just omit the figure */
+      }
+    },
+    setSpendCap: async (capUsd) => {
+      try {
+        const res = await fetch('/api/budget', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cap_usd: capUsd }),
+        });
+        const body = (await res.json()) as BudgetState & { error?: string };
+        if (!res.ok) return body.error ?? 'Could not update the budget.';
+        set({ budget: body });
+        return null;
+      } catch {
+        return 'Could not reach the budget service.';
+      }
+    },
     partValues: {},
+    lensOverrides: {},
     partSeedTurn: null,
     lastEdit: null,
     setPartValue: (partId, value, fromAgent = false) =>
-      set((s) => ({
-        partValues: { ...s.partValues, [partId]: value },
-        ...(fromAgent ? { lastEdit: { id: partId, n: (s.lastEdit?.n ?? 0) + 1 } } : {}),
-      })),
+      set((s) => {
+        const partValues = { ...s.partValues, [partId]: value };
+        if (s.partSeedTurn) saveDraft(s.partSeedTurn, { values: partValues, overrides: s.lensOverrides, at: Date.now() });
+        return {
+          partValues,
+          ...(fromAgent ? { lastEdit: { id: partId, n: (s.lastEdit?.n ?? 0) + 1 } } : {}),
+        };
+      }),
+    setLensOverride: (modelId, partId, value) =>
+      set((s) => {
+        const lensOverrides = { ...s.lensOverrides, [modelId]: { ...(s.lensOverrides[modelId] ?? {}), [partId]: value } };
+        if (s.partSeedTurn) saveDraft(s.partSeedTurn, { values: s.partValues, overrides: lensOverrides, at: Date.now() });
+        return { lensOverrides };
+      }),
+    revertLens: (modelId) =>
+      set((s) => {
+        const lensOverrides = { ...s.lensOverrides };
+        delete lensOverrides[modelId];
+        if (s.partSeedTurn) saveDraft(s.partSeedTurn, { values: s.partValues, overrides: lensOverrides, at: Date.now() });
+        return { lensOverrides };
+      }),
+    // Seed from the agent's iteration-zero block, then RESTORE the user's saved draft over the top —
+    // so a reload resumes exactly where they left off instead of reverting their typing.
     seedBuilder: (turnId, seed) =>
-      set((s) => (s.partSeedTurn === turnId ? {} : { partValues: seed, partSeedTurn: turnId, lastEdit: null })),
-    send: (prompt, references = [], builder, referenceAssetIds) => {
+      set((s) => {
+        if (s.partSeedTurn === turnId) return {};
+        const draft = loadDrafts()[turnId];
+        return {
+          partValues: { ...seed, ...(draft?.values ?? {}) },
+          lensOverrides: draft?.overrides ?? {},
+          partSeedTurn: turnId,
+          lastEdit: null,
+        };
+      }),
+    send: (prompt, references = [], builder, referenceAssetIds, referenceRoles) => {
       const clean = prompt.trim();
       const id =
         typeof crypto !== 'undefined' && crypto.randomUUID
@@ -690,7 +854,7 @@ export const useChatTurnsStore = create<ChatTurnsState>((set, get) => {
         ],
       }));
       // Fire and forget — the turn lives in the store, streamed in the background.
-      void run(id, clean, references, builder, referenceAssetIds);
+      void run(id, clean, references, referenceRoles, builder, referenceAssetIds);
       return id;
     },
     loadThread: async (threadId) => {

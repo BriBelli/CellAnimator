@@ -34,6 +34,10 @@ import { BuilderPanel } from './chat/BuilderPanel';
 import { PromptString } from './chat/PromptString';
 import { GreetingHero } from './GreetingHero';
 import { scoreBuilder } from '../lib/prompt-score';
+import type { CraftResult } from '../lib/agents/model-agent/craft-critique';
+import type { CraftRollup } from '../lib/agents/model-agent/craft-rollup';
+import { compileFan, type CompiledPrompt } from '../lib/engine/prompt-compile';
+import { getModel } from '../lib/engine/model-registry';
 import { isModelAgentBlockingNow } from '../store/model-agent-store';
 
 /** The fresh-section greeting. Every section STARTS as the conversation, so an empty section must
@@ -67,6 +71,17 @@ export default function ChatView({ initialPrompt }: Props) {
   const activeMedium = useChatTurnsStore((s) => s.activeMedium);
   const activeFrame = useChatTurnsStore((s) => s.activeFrame);
   const threadId = useChatTurnsStore((s) => s.threadId);
+  const fanConfig = useChatTurnsStore((s) => s.fanConfig);
+  // The remaining budget drives the pre-render cost warning, so it loads on mount and refreshes
+  // after any turn that could have spent — a stale figure would understate what a render costs.
+  const loadBudget = useChatTurnsStore((s) => s.loadBudget);
+  const budget = useChatTurnsStore((s) => s.budget);
+  useEffect(() => { void loadBudget(); }, [loadBudget]);
+  // Diverged lens values live in the store (persisted with the builder draft) so an override the
+  // user deliberately set survives a reload, exactly like the brief itself.
+  const overrides = useChatTurnsStore((s) => s.lensOverrides);
+  const setLensOverride = useChatTurnsStore((s) => s.setLensOverride);
+  const revertLens = useChatTurnsStore((s) => s.revertLens);
   const setActiveMedium = useChatTurnsStore((s) => s.setActiveMedium);
   const send = useChatTurnsStore((s) => s.send);
   const loadThread = useChatTurnsStore((s) => s.loadThread);
@@ -195,11 +210,16 @@ export default function ChatView({ initialPrompt }: Props) {
     .reverse()
     .flatMap((t) => t.images.map((img) => ({ ...img, turnId: t.id })));
   const generating = turns.some((t) => t.generating);
+  // Refresh after a run settles: a stale remaining-budget would understate the next render.
+  useEffect(() => {
+    if (!generating) void loadBudget();
+  }, [generating, loadBudget]);
   // The MOST RECENT render's fan (per-model status) — drives the stage's per-model loaders so ALL N
   // show at once, not a single ambiguous spinner. Not limited to the generating turn: once the run
   // settles, the same fan tells the stage which models succeeded and which failed (and why).
   const fanTurn = [...turns].reverse().find((t) => t.fan && t.fan.length > 0);
-  const genFan = fanTurn?.fan ?? [];
+  // Memoised: a fresh [] each render would re-run every consumer of the fan (incl. lens compilation).
+  const genFan = useMemo(() => fanTurn?.fan ?? [], [fanTurn]);
 
   const openWorkflow = useCallback(
     (medium: 'image' | 'video') => setActiveMedium(medium),
@@ -245,12 +265,158 @@ export default function ChatView({ initialPrompt }: Props) {
   useEffect(() => {
     if (builder) seedBuilder(builder.turnId, Object.fromEntries(builder.block.parts.map((p) => [p.id, p.value ?? ''])));
   }, [builder, seedBuilder]);
+  // ── ONE BRIEF, N LENSES ────────────────────────────────────────────────────────────────────────
+  // The user authors ONE prompt (the lead model's formula). Every other model in the fan gets that
+  // same brief COMPILED into its own documented shape — a lens is a VIEW, never a second document.
+  // Lenses only appear on a MANUAL fan: in auto mode the router hasn't chosen the models yet, so
+  // claiming to show them would be fiction.
+  const [activeLensId, setActiveLensId] = useState<string | undefined>(undefined);
+  const [serverCompiled, setServerCompiled] = useState<CompiledPrompt[] | null>(null);
+
+  const lenses = useMemo<CompiledPrompt[] | undefined>(() => {
+    if (!builder) return undefined;
+    const leadId = builder.block.modelId;
+    // MANUAL: the models you picked. AUTO: nothing until a render — the router chooses per request,
+    // so before the fan resolves there is genuinely nothing to show. Once it HAS resolved, the models
+    // are on screen in the results, and hiding their lenses would just be withholding what you can
+    // already see. So auto borrows the last run's actual fan.
+    const ids =
+      fanConfig.mode === 'manual'
+        ? fanConfig.models
+        : genFan.filter((f) => f.state !== 'skipped').map((f) => f.modelId).filter(Boolean);
+    const all = Array.from(new Set([leadId, ...ids].filter((x): x is string => !!x)));
+    if (all.length < 2) return undefined;
+    const models = all.map(getModel).filter((m): m is NonNullable<ReturnType<typeof getModel>> => !!m);
+    if (models.length < 2) return undefined;
+    // Local compile is an ESTIMATE from the seed formulas; a fan critique returns the server's
+    // authoritative compile (which knows the doctrine-distilled formulas) and replaces it.
+    const local = compileFan(models, leadId ?? models[0].id, partValues, { overrides });
+    if (!serverCompiled) return local;
+    return local.map((l) => serverCompiled.find((sc) => sc.modelId === l.modelId) ?? l);
+  }, [builder, fanConfig, genFan, partValues, overrides, serverCompiled]);
+
+  const activeLens = lenses?.find((l) => l.modelId === (activeLensId ?? lenses[0]?.modelId));
+  const isLeadLens = !lenses || !activeLens || activeLens.modelId === lenses[0]?.modelId;
+
+  // CRAFT CRITIQUE — the earned score (structure is free + instant; craft costs a call, so the user
+  // asks for it). Invalidated on every edit: a critique that no longer matches the prompt on screen
+  // would be exactly the kind of number-you-can't-trust this replaced.
+  const [craft, setCraft] = useState<CraftResult | null>(null);
+  const [rollup, setRollup] = useState<CraftRollup | null>(null);
+  const [lensScores, setLensScores] = useState<Record<string, number>>({});
+  const [critiquing, setCritiquing] = useState(false);
+
+  const critiqueBody = useCallback(
+    (modelIds?: string[]) => ({
+      modelId: builder?.block.modelId,
+      modelIds,
+      // The brief is always sent in the LEAD's shape; the server compiles it per model.
+      parts: (builder?.block.parts ?? []).map((p) => ({ id: p.id, label: p.label, value: partValues[p.id] ?? '' })),
+      overrides,
+    }),
+    [builder, partValues, overrides],
+  );
+
+  /** Judge the lens the user is looking at — one call. */
+  const requestCritique = useCallback(async () => {
+    if (!builder) return;
+    setCritiquing(true);
+    try {
+      const target = activeLens?.modelId ?? builder.block.modelId;
+      const res = await fetch('/api/prompt-critique', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...critiqueBody(), modelId: target }),
+      });
+      const result = (await res.json()) as CraftResult;
+      setCraft(result);
+      if (result.available) setLensScores((m) => ({ ...m, [result.modelId]: result.score }));
+    } catch {
+      setCraft(null); // a failed critique shows nothing, never a stale or invented score
+    } finally {
+      setCritiquing(false);
+    }
+  }, [builder, activeLens, critiqueBody]);
+
+  /** Judge the WHOLE fan and roll up universal vs model-specific findings — N calls, so explicit. */
+  const requestCritiqueAll = useCallback(async () => {
+    if (!builder || !lenses) return;
+    setCritiquing(true);
+    try {
+      const res = await fetch('/api/prompt-critique', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(critiqueBody(lenses.map((l) => l.modelId))),
+      });
+      const data = (await res.json()) as { results?: CraftResult[]; rollup?: CraftRollup; compiled?: CompiledPrompt[] };
+      const results = data.results ?? [];
+      setRollup(data.rollup ?? null);
+      if (data.compiled) setServerCompiled(data.compiled);
+      setLensScores(
+        Object.fromEntries(results.filter((r) => r.available).map((r) => [r.modelId, (r as Extract<CraftResult, { available: true }>).score])),
+      );
+      const current = results.find((r) => r.modelId === (activeLensId ?? lenses[0].modelId));
+      setCraft(current ?? results[0] ?? null);
+    } catch {
+      setRollup(null);
+    } finally {
+      setCritiquing(false);
+    }
+  }, [builder, lenses, activeLensId, critiqueBody]);
+
+  // Any edit invalidates every judgement — a verdict must never outlive the prompt it judged.
+  useEffect(() => {
+    setCraft(null);
+    setRollup(null);
+    setLensScores({});
+  }, [partValues, overrides, builder?.turnId]);
+
+  /** The block the panel renders: the brief itself, or the active lens's compiled parts. */
+  const lensBlock = useMemo(() => {
+    if (!builder) return null;
+    if (isLeadLens || !activeLens) return builder.block;
+    const byId = new Map(builder.block.parts.map((p) => [p.id, p]));
+    return {
+      ...builder.block,
+      modelId: activeLens.modelId,
+      parts: activeLens.parts.map((p) => ({
+        id: p.id,
+        label: p.label,
+        guidance: p.guidance,
+        weight: p.weight,
+        value: p.value,
+        // Carry the agent's suggestions across when the part id survived the recompile.
+        recommend: byId.get(p.id)?.recommend,
+        chips: byId.get(p.id)?.chips ?? [],
+      })),
+    };
+  }, [builder, isLeadLens, activeLens]);
+
+  /** Values for the rendered block: the shared brief, or this lens's compiled/overridden values. */
+  const lensValues = useMemo<Record<string, string>>(() => {
+    if (isLeadLens || !activeLens) return partValues;
+    return Object.fromEntries(activeLens.parts.map((p) => [p.id, p.value]));
+  }, [isLeadLens, activeLens, partValues]);
+
+  /** Editing in a non-lead lens DIVERGES that model (opt-in, marked, revertible). */
+  const setLensValue = useCallback(
+    (id: string, value: string) => {
+      if (isLeadLens || !activeLens) {
+        setPartValue(id, value);
+        return;
+      }
+      setLensOverride(activeLens.modelId, id, value);
+    },
+    [isLeadLens, activeLens, setPartValue, setLensOverride],
+  );
+
+
   const builderScore = useMemo(
     () =>
-      builder
-        ? scoreBuilder(builder.block.parts.map((p) => ({ id: p.id, weight: p.weight ?? 1, value: partValues[p.id] ?? '', anchors: [] })))
+      lensBlock
+        ? scoreBuilder(lensBlock.parts.map((p) => ({ id: p.id, weight: p.weight ?? 1, value: lensValues[p.id] ?? '', anchors: [] })))
         : null,
-    [builder, partValues]
+    [lensBlock, lensValues]
   );
 
   // The nav rail drives which workflow shows — no agent-driven view flipping needed.
@@ -488,20 +654,35 @@ export default function ChatView({ initialPrompt }: Props) {
                 </div>
                 <BuilderPanel
                   key={builder.turnId}
-                  block={builder.block}
-                  values={partValues}
+                  block={lensBlock ?? builder.block}
+                  values={lensValues}
                   score={builderScore}
-                  onValueChange={setPartValue}
+                  craft={craft}
+                  onCritique={requestCritique}
+                  onCritiqueAll={requestCritiqueAll}
+                  critiquing={critiquing}
+                  lenses={lenses}
+                  activeLensId={activeLens?.modelId}
+                  onSelectLens={setActiveLensId}
+                  lensScores={lensScores}
+                  rollup={rollup}
+                  onRevertLens={revertLens}
+                  budgetBlock={
+                    budget && !budget.allowed
+                      ? `Budget reached — $${budget.spent_usd.toFixed(2)} of $${budget.cap_usd.toFixed(2)} spent. Raise your budget from the account menu to keep generating.`
+                      : null
+                  }
+                  onValueChange={setLensValue}
                   highlight={lastEdit}
                   busy={generating}
                   initialRefs={latestRefs}
-                  onRender={(prompt, references) => {
+                  onRender={(prompt, references, referenceRoles) => {
                     // Same graceful gate as submit — Render is a creative-section execute path.
                     if (isModelAgentBlockingNow()) {
                       toastManager.info('The model agent is warming up — one moment…');
                       return;
                     }
-                    send(prompt, references);
+                    send(prompt, references, undefined, undefined, referenceRoles);
                   }}
                 />
               </aside>

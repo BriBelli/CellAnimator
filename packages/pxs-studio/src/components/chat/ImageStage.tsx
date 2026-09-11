@@ -33,6 +33,12 @@ export interface StageImage {
 /** How results are laid out — the split toggle. Persisted per user. */
 export type StageView = 'grouped' | 'stream';
 
+/** Is this delivered media a clip? Decided from the URL rather than the workspace medium, so a turn
+ *  that mixes stills and motion renders each correctly instead of picking one for the whole grid. */
+function isPlayable(url: string): boolean {
+  return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
+}
+
 /** localStorage key for the results view preference (grouped ↔ stream). */
 const VIEW_STORAGE_KEY = 'pxs-stage-view';
 
@@ -72,7 +78,8 @@ const CSS = `
 .pxc-stage-views { margin-left: auto; display: inline-flex; gap: 2px; padding: 2px;
   border: 1px solid var(--pxs-glass-border); border-radius: var(--a2ui-radius-md); background: var(--a2ui-glass-dark); }
 .pxc-stage-view {
-  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 24px; padding: 0 10px;
+  font-size: var(--a2ui-text-xs); font-weight: var(--a2ui-font-medium); white-space: nowrap;
   border: none; background: none; border-radius: var(--a2ui-radius-sm); color: var(--a2ui-text-tertiary);
   cursor: pointer; transition: background var(--a2ui-transition-fast), color var(--a2ui-transition-fast);
 }
@@ -83,16 +90,22 @@ const CSS = `
    width × a fixed 4:3 box, image letterboxed inside): no more "one big, one small" — uniform, and three
    models sit side-by-side above the fold. Columns are a fixed width so the grid never stretches a lone
    image to fill the canvas. */
-.pxc-stage-groups { display: grid; grid-template-columns: repeat(auto-fill, var(--pxc-tile-w, 340px)); justify-content: start; gap: var(--a2ui-space-5) var(--a2ui-space-4); align-items: start; }
+/* GROUPED — each model is a SECTION: a tight header line, then that model's images flowing
+   left→right in the shared grid. It used to be a narrow fixed-width COLUMN per model, which stacked
+   every image of a model vertically and pushed the rest of the fan below the fold. */
+.pxc-stage-groups { display: flex; flex-direction: column; gap: var(--a2ui-space-5); }
 .pxc-stage-group { min-width: 0; display: flex; flex-direction: column; gap: var(--a2ui-space-3); }
-.pxc-stage-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.pxc-stage-model { font-size: var(--a2ui-text-sm); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
+/* The header is a COMPACT chip sized to its content — it never spans the section or crowds the art. */
+.pxc-stage-group-head { display: inline-flex; align-items: center; gap: 7px; min-width: 0; width: fit-content;
+  max-width: 100%; padding: 4px 10px 4px 8px; border-radius: var(--a2ui-radius-full);
+  background: var(--a2ui-bg-secondary); border: 1px solid var(--pxs-border-subtle); }
+.pxc-stage-model { font-size: var(--a2ui-text-xs); font-weight: var(--a2ui-font-semibold); color: var(--a2ui-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Per-model FIT SCORE — the badge that speeds the choosing once the field is trusted. */
 .pxc-stage-score { flex-shrink: 0; display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
   border-radius: var(--a2ui-radius-full); font-family: var(--a2ui-font-mono); font-size: 10px; font-variant-numeric: tabular-nums;
   color: var(--pxs-accent-text); background: var(--a2ui-accent-subtle); border: 1px solid var(--a2ui-border-subtle); }
-.pxc-stage-count { margin-left: auto; flex-shrink: 0; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); font-variant-numeric: tabular-nums; }
+.pxc-stage-count { flex-shrink: 0; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); font-variant-numeric: tabular-nums; }
 /* Per-model STATUS chip — the column says how its API call is doing: spinner while running,
    ✓ when it settled, ⚠ when it failed. Without it a column can only be read by absence. */
 .pxc-stage-state { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; }
@@ -111,38 +124,42 @@ const CSS = `
 }
 .pxc-stage-failed-sub { color: var(--a2ui-text-tertiary); font-size: var(--a2ui-text-xs); }
 
-.pxc-stage-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; padding: var(--a2ui-space-5) var(--a2ui-space-6) var(--a2ui-space-8); }
+.pxc-stage-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0;
+  padding: var(--a2ui-space-4) var(--a2ui-space-5) var(--a2ui-space-8);
+  /* The canvas — not the window — is what tiles must fit. Opening the Prompt guide halves this
+     width, so viewport media queries would size tiles for a canvas that isn't there. */
+  container-type: inline-size; }
+
+/* THE TILE GRID — every result surface uses this. Tiles are RELATIVE (minmax + 1fr), so they always
+   flow left→right and wrap; they never collapse into a single column. Previously this was a fixed
+   340px track that silently became a one-column stack of oversized tiles the moment the canvas got
+   narrow — which is every time the Prompt guide is open. Compact by default so a whole fan sits
+   above the fold on a 15" laptop, growing with the canvas. */
+.pxc-tiles { display: grid; gap: var(--a2ui-space-3);
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); align-items: start; }
+@container (min-width: 560px) { .pxc-tiles { gap: var(--a2ui-space-4); grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
+@container (min-width: 900px)  { .pxc-tiles { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); } }
+@container (min-width: 1400px) { .pxc-tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
 .pxc-stage-skipped { display: flex; flex-wrap: wrap; gap: var(--a2ui-space-2) var(--a2ui-space-4); margin-bottom: var(--a2ui-space-4); }
 .pxc-stage-skip-item { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--a2ui-text-xs); color: var(--a2ui-text-secondary); }
 .pxc-stage-skip-dash { color: var(--a2ui-text-tertiary); }
 .pxc-stage-skip-reason { color: var(--a2ui-text-tertiary); }
-/* BENTO — a repeating 4-tile rhythm (hero 16/9 span-2 · square · square · wide 16/10 span-2) over a
-   2-col grid, so results pack like the mock instead of a uniform square grid. "dense" backfills the
-   holes that spanning tiles would otherwise leave. */
-.pxc-stage-grid {
-  display: grid; gap: var(--a2ui-space-4);
-  grid-template-columns: 1fr 1fr;
-  grid-auto-flow: row dense;
-}
 .pxc-stage-tile {
   position: relative; overflow: hidden; aspect-ratio: 4 / 3;
   border-radius: var(--a2ui-radius-lg); background: var(--a2ui-bg-tertiary);
   box-shadow: 0 0 0 1px var(--pxs-border-subtle);
   transition: box-shadow var(--a2ui-transition-fast);
 }
-.pxc-bento-hero { grid-column: span 2; aspect-ratio: 16 / 9; }
-.pxc-bento-wide { grid-column: span 2; aspect-ratio: 16 / 10; }
-.pxc-bento-sq   { aspect-ratio: 1 / 1; }
 /* BOLD-mode accent washes — alternating coral/violet radial under each tile (behind the image, so a
    real thumbnail covers it; it reads on empty/loading tiles). Professional flips --px-tint-* neutral. */
 .pxc-stage-tile:hover { box-shadow: 0 0 0 1px var(--a2ui-border-default); }
 /* CONTAIN, not cover — never crop what the model made (a character sheet is the whole image). Letterbox
    on the tile bg. */
-.pxc-stage-tile img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
+.pxc-stage-tile img, .pxc-stage-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--a2ui-bg-tertiary); }
 .pxc-stage-overlay {
   position: absolute; inset: 0;
-  display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px;
-  padding: var(--a2ui-space-3);
+  display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px;
+  padding: 6px;
   background: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 32%);
   opacity: 0; transition: opacity var(--a2ui-transition-fast);
 }
@@ -158,8 +175,9 @@ const CSS = `
 }
 .pxc-stage-action:hover { background: var(--a2ui-bg-elevated); }
 .pxc-stage-action[data-on="true"] { color: var(--a2ui-success); }
+/* Sized for a COMPACT tile — 30px buttons covered a third of a small thumbnail. */
 .pxc-stage-icon {
-  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
   border-radius: var(--a2ui-radius-md); border: 1px solid var(--pxs-glass-border);
   background: var(--a2ui-glass-dark); backdrop-filter: blur(8px); color: var(--a2ui-text-primary);
   cursor: pointer; transition: background var(--a2ui-transition-fast); text-decoration: none;
@@ -168,9 +186,10 @@ const CSS = `
 .pxc-stage-icon[data-on="true"] { color: var(--a2ui-success); }
 .pxc-stage-icon:disabled { cursor: default; }
 .pxc-stage-badge {
-  position: absolute; left: 8px; bottom: 8px;
-  padding: 2px 8px; border-radius: var(--a2ui-radius-full);
-  font-size: var(--a2ui-text-xs); color: var(--a2ui-text-primary);
+  position: absolute; left: 6px; right: 6px; bottom: 6px; width: fit-content; max-width: calc(100% - 12px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 7px; border-radius: var(--a2ui-radius-full);
+  font-size: 10px; color: var(--a2ui-text-primary);
   background: var(--a2ui-glass-dark); backdrop-filter: blur(8px);
   border: 1px solid var(--pxs-glass-border);
   opacity: 0; transition: opacity var(--a2ui-transition-fast);
@@ -205,7 +224,7 @@ const CSS = `
   position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
   color: var(--a2ui-text-tertiary); font-size: var(--a2ui-text-sm);
-  aspect-ratio: 4 / 3; border-radius: var(--a2ui-radius-lg); padding: var(--a2ui-space-4);
+  aspect-ratio: 4 / 3; border-radius: var(--a2ui-radius-lg); padding: var(--a2ui-space-3);
   background: var(--a2ui-bg-tertiary); box-shadow: 0 0 0 1px var(--pxs-border-subtle);
   text-align: center;
 }
@@ -216,11 +235,15 @@ const CSS = `
   background-size: 220% 100%; animation: pxc-stage-shimmer 1.8s var(--a2ui-ease-entrance) infinite;
 }
 .pxc-stage-pending > * { position: relative; }
-.pxc-stage-pending-label { color: var(--a2ui-text-secondary); white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; max-width: 100%; }
+.pxc-stage-pending-label { color: var(--a2ui-text-secondary); font-size: var(--a2ui-text-xs);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 /* The honest PHASE — what this model's call is actually doing right now. Never a fake percentage:
    image adapters don't stream progress, so we show the phase we truly know. */
-.pxc-stage-phase { font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); }
+.pxc-stage-phase { font-size: 10px; color: var(--a2ui-text-tertiary); }
+/* A landed image FADES over its skeleton rather than snapping in — the one cheap polish that makes a
+   live fan feel composed. Pure CSS on mount; no new state. */
+@keyframes pxc-tile-in { from { opacity: 0; } to { opacity: 1; } }
+.pxc-stage-tile img { animation: pxc-tile-in 0.28s var(--a2ui-ease-entrance) both; }
 .pxc-stage-spinner { width: 15px; height: 15px; flex-shrink: 0; border-radius: 50%;
   border: 2px solid var(--pxs-border-subtle); border-top-color: var(--pxs-accent-text);
   animation: pxc-stage-spin 0.7s linear infinite; }
@@ -228,9 +251,9 @@ const CSS = `
 @keyframes pxc-stage-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 0.9; } }
 @keyframes pxc-stage-shimmer { 0% { background-position: 180% 0; } 100% { background-position: -80% 0; } }
 
-/* STREAM view — arrival order, uniform tiles packed left; loaders mix in while the fan runs. */
-.pxc-stage-stream { display: grid; grid-template-columns: repeat(auto-fill, var(--pxc-tile-w, 340px));
-  justify-content: start; gap: var(--a2ui-space-4); align-items: start; }
+/* STREAM view — arrival order in the shared responsive grid. UNIFORM tiles: images land in
+   unpredictable completion order, and varied bento spans would reshuffle the whole grid on every
+   arrival. Uniform keeps a live fan calm. */
 
 /* Empty state — the mockup's clean full-bleed canvas: the shared <GreetingHero> lockup invites the
    first prompt (the workflow carousel is a later slice). Calm, no glyph, no marketing. The title +
@@ -250,14 +273,6 @@ const CSS = `
 /** "a car" / "an owl" / "the dragon" → "car" / "owl" / "dragon" so "shape your {subject}" reads right. */
 function cleanSubject(s: string): string {
   return s.replace(/^\s*(a|an|the)\s+/i, '').trim() || s.trim();
-}
-
-/** Bento rhythm — a repeating 4-tile cycle: hero (span-2 16/9) · square · square · wide (span-2 16/10). */
-function bentoClass(i: number): string {
-  const m = i % 4;
-  if (m === 0) return 'pxc-bento-hero';
-  if (m === 3) return 'pxc-bento-wide';
-  return 'pxc-bento-sq';
 }
 
 /** The adapter's failure reason → plain words (mirrors FanStatus — same honest taxonomy). */
@@ -423,7 +438,14 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
   const renderTile = (img: StageImage, gi: number, cls: string) => (
     <div key={`${img.turnId}-${img.index}`} className={`pxc-stage-tile ${cls}`} tabIndex={0}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={img.url} alt={img.modelLabel || 'generated image'} />
+      {isPlayable(img.url) ? (
+        // A clip is PLAYABLE media, not a picture: muted + loop + playsInline so a grid of results
+        // behaves like contact sheets rather than a wall of things demanding to be clicked.
+        <video src={img.url} muted loop playsInline preload="metadata" onMouseEnter={(e) => void e.currentTarget.play().catch(() => {})} onMouseLeave={(e) => e.currentTarget.pause()} />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={img.url} alt={img.modelLabel || 'generated image'} />
+      )}
       <div className="pxc-stage-overlay">
         {onSaveAsset && (
           <button
@@ -461,26 +483,30 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
             <span className="pxc-stage-label">Results</span>
             {/* The two lenses on one fan. Only worth offering once there's more than one model. */}
             {(multiModel || streamPending.length > 0) && (
+              /* Two anonymous glyphs told you nothing about what either lens does — labelled, with
+                 arrival order first because that's what you watch while the fan is still running. */
               <div className="pxc-stage-views" role="group" aria-label="Results view">
-                <button
-                  type="button"
-                  className="pxc-stage-view"
-                  data-on={view === 'grouped' ? 'true' : 'false'}
-                  onClick={() => chooseView('grouped')}
-                  title="Grouped by model"
-                  aria-pressed={view === 'grouped'}
-                >
-                  <Icon name="grid" size={14} />
-                </button>
                 <button
                   type="button"
                   className="pxc-stage-view"
                   data-on={view === 'stream' ? 'true' : 'false'}
                   onClick={() => chooseView('stream')}
-                  title="Stream order"
+                  title="Every image in the order it landed"
                   aria-pressed={view === 'stream'}
                 >
-                  <Icon name="list" size={14} />
+                  <Icon name="list" size={13} />
+                  Stream order
+                </button>
+                <button
+                  type="button"
+                  className="pxc-stage-view"
+                  data-on={view === 'grouped' ? 'true' : 'false'}
+                  onClick={() => chooseView('grouped')}
+                  title="Each model's take, side by side"
+                  aria-pressed={view === 'grouped'}
+                >
+                  <Icon name="grid" size={13} />
+                  Group by model
                 </button>
               </div>
             )}
@@ -500,8 +526,8 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
             )}
             {/* Pre-routing: generating but the fan isn't known yet — one honest loader until it lands. */}
             {generating && groups.length === 0 && (
-              <div className="pxc-stage-groups">
-                <div className="pxc-stage-group">
+              <div className="pxc-tiles">
+                <div>
                   <div className="pxc-stage-pending">
                     <span className="pxc-stage-spinner" />
                     <span className="pxc-stage-pending-label">Routing…</span>
@@ -529,31 +555,33 @@ export function ImageStage({ images, generating, genPlan, fanTurnId, medium, con
                         )}
                       </div>
                     )}
-                    {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
-                    {Array.from({ length: g.pending }).map((_, i) => (
-                      <div key={`pending-${g.label}-${i}`} className="pxc-stage-pending">
-                        <span className="pxc-stage-spinner" />
-                        <span className="pxc-stage-pending-label">{g.label}</span>
-                        <span className="pxc-stage-phase">
-                          {phaseText({ state: g.state, delivered: g.runLanded, n: g.runLanded + g.pending })}
-                        </span>
-                      </div>
-                    ))}
-                    {/* The failure KEEPS the slot — the model that didn't deliver is still accounted for. */}
-                    {g.state === 'failed' && g.runLanded === 0 && (
-                      <div className="pxc-stage-failed">
-                        <StateGlyph state="failed" />
-                        <span>{plainReason(g.reason)}</span>
-                        <span className="pxc-stage-failed-sub">{g.label} delivered nothing</span>
-                      </div>
-                    )}
+                    <div className="pxc-tiles">
+                      {g.items.map(({ img, gi }) => renderTile(img, gi, ''))}
+                      {Array.from({ length: g.pending }).map((_, i) => (
+                        <div key={`pending-${g.label}-${i}`} className="pxc-stage-pending">
+                          <span className="pxc-stage-spinner" />
+                          <span className="pxc-stage-pending-label">{g.label}</span>
+                          <span className="pxc-stage-phase">
+                            {phaseText({ state: g.state, delivered: g.runLanded, n: g.runLanded + g.pending })}
+                          </span>
+                        </div>
+                      ))}
+                      {/* The failure KEEPS the slot — the model that didn't deliver is still accounted for. */}
+                      {g.state === 'failed' && g.runLanded === 0 && (
+                        <div className="pxc-stage-failed">
+                          <StateGlyph state="failed" />
+                          <span>{plainReason(g.reason)}</span>
+                          <span className="pxc-stage-failed-sub">{g.label} delivered nothing</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               /* STREAM — arrival order, one flat feed: landed tiles first (newest-first ordering is
                  already applied upstream), then everything still cooking, then any failures. */
-              <div className="pxc-stage-stream">
+              <div className="pxc-tiles">
                 {images.map((img, gi) => renderTile(img, gi, ''))}
                 {streamPending.map(({ key, f }) => (
                   <div key={`stream-pending-${key}`} className="pxc-stage-pending">

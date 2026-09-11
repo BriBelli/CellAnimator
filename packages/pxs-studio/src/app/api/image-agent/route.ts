@@ -1,8 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createFanRecorder, runImageAgent, type FanConfigInput } from '../../../lib/agents/image-agent';
-import { refreshRegistryIfDue } from '../../../lib/agents/model-refresh-runner';
-import { refreshCapabilitiesIfDue } from '../../../lib/agents/capability-refresh';
-import { IMAGE_MODELS } from '../../../lib/engine/model-registry';
+import { runModelIntelligenceIfDue } from '../../../lib/agents/model-intelligence';
 import type { EpistemicFrame } from '../../../lib/agents/epistemic-frame';
 import {
   A2UI_VERSION,
@@ -65,6 +63,8 @@ export async function POST(req: Request) {
     frame?: PostedFrame;
     history?: HistoryMsg[];
     references?: string[];
+    /** Index-aligned with `references` — what each image is FOR (character / style / object / general). */
+    reference_roles?: string[];
     reference_asset_ids?: (string | null)[];
     thread_id?: string;
     user_id?: string;
@@ -90,13 +90,17 @@ export async function POST(req: Request) {
   // Reference URLs paired with an optional saved-asset id (from @-mentions), kept index-aligned so
   // an existing asset is LINKED (real lineage) instead of re-persisted as a duplicate.
   const rawRefIds = Array.isArray(body.reference_asset_ids) ? body.reference_asset_ids : [];
+  const rawRefRoles = Array.isArray(body.reference_roles) ? body.reference_roles : [];
   const refPairs = (Array.isArray(body.references) ? body.references : [])
     .map((url, i) => ({
       url: typeof url === 'string' ? url.trim() : '',
       assetId: typeof rawRefIds[i] === 'string' && (rawRefIds[i] as string).trim() ? (rawRefIds[i] as string) : null,
+      // What this image is FOR — routed to the model's real input channel downstream.
+      role: typeof rawRefRoles[i] === 'string' ? (rawRefRoles[i] as string) : 'general',
     }))
     .filter((p) => p.url.length > 0);
   const references = refPairs.map((p) => p.url);
+  const referenceRoles = refPairs.map((p) => p.role);
   // COLLABORATION state (the current Build parts + values) — present → the agent can edit/answer.
   const builderParts = Array.isArray(body.builder?.parts)
     ? body.builder!.parts
@@ -109,14 +113,11 @@ export async function POST(req: Request) {
   const db = await getDb();
   const living = createLivingContext(db);
 
-  // Keep the model registry self-maintaining WITHOUT taxing this turn: fire-and-forget, fully
-  // guarded, and — critically — it only reaches the network when a provider is actually past its
-  // TTL (see refreshRegistryIfDue). On the vast majority of turns nothing is due, so it's a single
-  // cheap DB read and returns instantly. The user's response never waits on it. (stale-while-revalidate)
-  void refreshRegistryIfDue(db, Date.now()).catch(() => {});
-  // …and re-VERIFY each model's real CAPABILITIES on the same daily cycle (ref limits, editing, versions)
-  // — grounded in live docs, not the seed. TTL-gated + capped, so it self-heals and then idles.
-  void refreshCapabilitiesIfDue(IMAGE_MODELS, db, { now: Date.now() }).catch(() => {});
+  // Keep the model registry self-maintaining WITHOUT taxing this turn: ONE workflow (availability ->
+  // discovery research -> capability re-verification; see lib/agents/model-intelligence.ts),
+  // fire-and-forget, fully guarded, and TTL-gated — on the vast majority of turns nothing is due, so
+  // it's a couple of cheap DB reads and returns instantly. (stale-while-revalidate)
+  void runModelIntelligenceIfDue(db, Date.now()).catch(() => {});
 
   const history: HistoryMsg[] = Array.isArray(body.history)
     ? body.history
@@ -226,7 +227,7 @@ export async function POST(req: Request) {
           count: 2,
         };
 
-        for await (const ev of runImageAgent(frame, { userMessage: prompt, history, references, builder, fan: body.fan })) {
+        for await (const ev of runImageAgent(frame, { userMessage: prompt, history, references, referenceRoles, builder, fan: body.fan })) {
           fanRecorder.observe(ev);
           if (ev.type === 'agent_usage') {
             agentInTok += ev.inputTokens;
