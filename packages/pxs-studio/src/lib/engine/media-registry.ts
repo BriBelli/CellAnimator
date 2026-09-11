@@ -17,7 +17,7 @@
  */
 
 import { PROVIDERS, registryTag, type Modality } from './provider-roster';
-import { IMAGE_MODELS, type ImageModel, type PromptFormula } from './model-registry';
+import { IMAGE_MODELS, type ImageModel, type ModelDoc, type PromptFormula } from './model-registry';
 
 // ── Per-modality criteria ────────────────────────────────────────────────────
 
@@ -35,8 +35,17 @@ export interface VideoCriteria {
   cameraControls: string[];
   /** Reference images accepted (start frame / character / style), if any. */
   maxReferenceImages?: number;
-  /** (low, high) USD per second of output — the spend band. */
+  /** (low, high) USD per second of output — the spend band across the model's whole range. */
   costPerSecondUsd?: [number, number];
+  /**
+   * USD per second BY RESOLUTION — the only shape that estimates a real video honestly.
+   *
+   * Video cost is driven by two axes at once (seconds × resolution) and the spread is enormous:
+   * Seedance is $0.07/s at 480p and $1.37/s at 4K, a 20× swing. A single band cannot tell a user
+   * whether the render they are about to commit to costs 30 cents or fourteen dollars, and for a
+   * ~50×-an-image medium that difference is the whole decision.
+   */
+  costPerSecondByResolution?: Record<string, number>;
   /** The prompt formula this model rewards (scene / subject / camera / motion / style parts). */
   promptFormula?: PromptFormula;
 }
@@ -74,6 +83,8 @@ export interface MediaModel {
   needsResearch?: boolean;
   /** The provider's own model id (adapter string) when it differs from `id`. */
   providerModelId?: string;
+  /** PINNED official docs — the deterministic floor the doctrine pass ingests (see model-registry). */
+  docs?: ModelDoc[];
   /** Per-modality criteria — present for each modality in `modalities`. */
   image?: ImageModel;
   video?: VideoCriteria;
@@ -105,6 +116,10 @@ const IMAGE_AS_MEDIA: MediaModel[] = IMAGE_MODELS.map((m) => ({
 // ── SEED: Video · Audio · Omni (agent-maintained; see file header) ────────────
 
 const SEEDED = '2026-07-26';
+/** Video facts re-verified against the live landscape on this date (the July seed was badly stale). */
+const VVID = '2026-08-29';
+/** Seedance 2.5 — surfaced by the succession sweep rather than by a person reading a docs page. */
+const V25 = '2026-09-03';
 
 /** Video-part prompt formula the router surfaces in the Video builder (scene → style). */
 const VIDEO_FORMULA: PromptFormula = {
@@ -118,30 +133,118 @@ const VIDEO_FORMULA: PromptFormula = {
   assembly: 'One cinematic sentence per shot, camera + motion explicit.',
 };
 
+/**
+ * Pinned official docs for the video models — the same deterministic floor the image side uses
+ * (company + key + DOCS). All URLs live-verified 2026-08-29.
+ */
+const VEO_DOCS: ModelDoc[] = [
+  { kind: 'api_reference', url: 'https://ai.google.dev/gemini-api/docs/video', verifiedAt: VVID },
+  { kind: 'model_card', url: 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate', verifiedAt: VVID },
+  { kind: 'pricing', url: 'https://ai.google.dev/gemini-api/docs/pricing', verifiedAt: VVID },
+];
+const SEEDANCE_DOCS: ModelDoc[] = [
+  { kind: 'api_reference', url: 'https://fal.ai/seedance-2.0', verifiedAt: VVID },
+];
+const HAPPYHORSE_DOCS: ModelDoc[] = [
+  { kind: 'api_reference', url: 'https://fal.ai/models/alibaba/happy-horse/v1.1/text-to-video/api', verifiedAt: VVID },
+  { kind: 'model_card', url: 'https://fal.ai/happyhorse-1.0', verifiedAt: VVID },
+];
+const KLING_DOCS: ModelDoc[] = [
+  { kind: 'api_reference', url: 'https://fal.ai/docs/model-api-reference/video-generation-api/kling-video-lipsync', verifiedAt: VVID },
+  { kind: 'prompting_guide', url: 'https://kling.ai/blog/kling-video-3-omni-native-lip-sync-audio-guide', verifiedAt: VVID },
+];
+
+/**
+ * ROUTABLE as of 2026-09-02: Seedance 2.0, Kling 3.0 and Happy Horse 1.1 — each verified by an actual
+ * render through the fal adapter (real MP4s, metered cost), which is the only evidence that counts.
+ * Veo 3.1 stays `needsResearch` because it has no adapter yet: it is knowledge we can reason about,
+ * not a route we can spend on. A model becomes routable when it has rendered, never before.
+ */
 const VIDEO_MODELS: MediaModel[] = [
   {
+    id: 'seedance-2.5', label: 'Seedance 2.5 (ByteDance)', provider: 'fal', envKey: 'FAL_API_KEY',
+    providerModelId: 'bytedance/seedance-2.5/text-to-video',
+    modalities: ['video'], tier: 3, sourceRefreshedAt: V25, docs: SEEDANCE_DOCS,
+    brief:
+      'ByteDance Seedance 2.5 — the long-form tier: clips up to 30 SECONDS (double 2.0) with a wider ' +
+      'reference budget across images, clips and audio. Not a straight replacement for 2.0, which it ' +
+      'beats on length but LOSES to on resolution (2.5 tops out at 1080p; 2.0 reaches 4K), so both are ' +
+      'kept and routed by what the shot needs. Found by the succession sweep 2026-09-03, which is the ' +
+      'first version bump this system caught itself rather than a human noticing in a browser tab.',
+    video: {
+      maxDurationSec: 30, resolutions: ['480p', '720p', '1080p'], nativeAudio: true,
+      motion: ['text', 'image-to-video', 'keyframe'],
+      cameraControls: ['pan', 'tilt', 'dolly', 'tracking', 'orbit'],
+      maxReferenceImages: 9,
+      costPerSecondUsd: [0.07, 0.34],
+      costPerSecondByResolution: { '480p': 0.07, '720p': 0.16, '1080p': 0.34 },
+      promptFormula: VIDEO_FORMULA,
+    },
+  },
+  {
+    id: 'seedance-2', label: 'Seedance 2.0 (ByteDance)', provider: 'fal', envKey: 'FAL_API_KEY',
+    providerModelId: 'bytedance/seedance-2.0/text-to-video',
+    modalities: ['video'], tier: 3, sourceRefreshedAt: VVID, docs: SEEDANCE_DOCS,
+    brief:
+      'ByteDance Seedance 2.0 (Feb 2026) — #1 on Artificial Analysis WITH audio, and the only model in ' +
+      'the roster that reaches 4K. Rich input set: 9 images + 3 clips + 3 audio in one generation, 4-15s. ' +
+      'KEPT ALONGSIDE 2.5 deliberately: 2.5 doubles the length but stops at 1080p, so 2.0 remains the ' +
+      'choice whenever finish resolution matters more than runtime. Verified 2026-08-29.',
+    video: {
+      maxDurationSec: 15, resolutions: ['480p', '720p', '1080p', '4K'], nativeAudio: true,
+      motion: ['text', 'image-to-video', 'keyframe'],
+      cameraControls: ['pan', 'tilt', 'dolly', 'tracking', 'orbit'],
+      maxReferenceImages: 9,
+      costPerSecondUsd: [0.07, 1.37], // 480p → 4K
+      costPerSecondByResolution: { '480p': 0.07, '720p': 0.16, '1080p': 0.34, '4k': 1.37 }, // verified 2026-08-29
+      promptFormula: VIDEO_FORMULA,
+    },
+  },
+  {
     id: 'veo-3.1', label: 'Veo 3.1 (Google)', provider: 'google', envKey: 'GEMINI_API_KEY',
-    modalities: ['video'], tier: 3, sourceRefreshedAt: SEEDED, needsResearch: true,
-    brief: 'Google flagship video — strong physics + prompt adherence, NATIVE synced audio in one pass (the unified renderer). Route hero shots and dialogue.',
-    video: { maxDurationSec: 8, resolutions: ['720p', '1080p'], nativeAudio: true, motion: ['text', 'image-to-video', 'camera-path'], cameraControls: ['pan', 'tilt', 'dolly', 'tracking', 'orbit'], maxReferenceImages: 3, costPerSecondUsd: [0.15, 0.5], promptFormula: VIDEO_FORMULA },
+    providerModelId: 'veo-3.1-generate-preview',
+    modalities: ['video'], tier: 3, sourceRefreshedAt: VVID, needsResearch: true, docs: VEO_DOCS,
+    brief:
+      'Google Veo 3.1 (Mar 2026) — the realism + native-audio flagship: synced dialogue, ambience and SFX in ONE pass at 48kHz, 1080p with 4K upscaling. SCENE EXTENSION chains up to 20 clips for 140s+ narratives, and frames-to-video interpolates between a start and end image — both of which matter more than clip length for film work. Family: quality / fast / lite. Every output carries a mandatory SynthID watermark. Verified 2026-08-29.',
+    video: {
+      maxDurationSec: 8, resolutions: ['720p', '1080p', '4K'], nativeAudio: true,
+      motion: ['text', 'image-to-video', 'keyframe', 'camera-path'],
+      cameraControls: ['pan', 'tilt', 'dolly', 'tracking', 'orbit'],
+      maxReferenceImages: 3,
+      costPerSecondUsd: [0.03, 0.6], // lite/no-audio → 4K with audio
+      promptFormula: VIDEO_FORMULA,
+    },
   },
   {
-    id: 'sora-2', label: 'Sora 2 (OpenAI)', provider: 'openai', envKey: 'OPENAI_API_KEY',
-    modalities: ['video'], tier: 3, sourceRefreshedAt: SEEDED, needsResearch: true,
-    brief: 'OpenAI cinematic video — long-form coherence, physical realism, strong world simulation. Route narrative sequences.',
-    video: { maxDurationSec: 20, resolutions: ['720p', '1080p'], nativeAudio: true, motion: ['text', 'image-to-video'], cameraControls: ['pan', 'tilt', 'dolly', 'tracking'], maxReferenceImages: 1, costPerSecondUsd: [0.1, 0.5], promptFormula: VIDEO_FORMULA },
+    id: 'kling-3', label: 'Kling 3.0 (Kuaishou)', provider: 'fal', envKey: 'FAL_API_KEY',
+    providerModelId: 'fal-ai/kling-video/v3/pro',
+    modalities: ['video'], tier: 3, sourceRefreshedAt: VVID, docs: KLING_DOCS,
+    brief:
+      'Kling 3.0 (Feb 2026) — the STORYBOARD model: a multi-shot mode that renders 1-6 shots from one prompt (15s total) with a shared audio timeline, plus native joint audio and lip-sync across Mandarin, English, Japanese, Korean and Spanish with no separate pass. Directly serves sequence work rather than single clips. Audio adds ~$0.056/s, voice control ~$0.028/s. Verified 2026-08-29 — the earlier seed had nativeAudio FALSE, which was wrong and would have routed every dialogue shot away from it.',
+    video: {
+      maxDurationSec: 15, resolutions: ['720p', '1080p'], nativeAudio: true,
+      motion: ['text', 'image-to-video', 'keyframe'],
+      cameraControls: ['pan', 'tilt', 'dolly', 'zoom'],
+      maxReferenceImages: 1,
+      costPerSecondUsd: [0.05, 0.25],
+      promptFormula: VIDEO_FORMULA,
+    },
   },
   {
-    id: 'kling-3-pro', label: 'Kling 3.0 Pro (Replicate)', provider: 'replicate', envKey: 'REPLICATE_API_TOKEN',
-    modalities: ['video'], tier: 2, sourceRefreshedAt: SEEDED, needsResearch: true,
-    brief: 'Strong motion + character consistency, image-to-video start frames. Route action + dance + expressive motion.',
-    video: { maxDurationSec: 10, resolutions: ['720p', '1080p'], nativeAudio: false, motion: ['text', 'image-to-video', 'keyframe'], cameraControls: ['pan', 'tilt', 'dolly', 'zoom'], maxReferenceImages: 1, costPerSecondUsd: [0.05, 0.2], promptFormula: VIDEO_FORMULA },
-  },
-  {
-    id: 'seedance-2', label: 'Seedance 2.0 (Replicate)', provider: 'replicate', envKey: 'REPLICATE_API_TOKEN',
-    modalities: ['video'], tier: 2, sourceRefreshedAt: SEEDED, needsResearch: true,
-    brief: 'Fast, stylized, multi-shot sequences. Route quick iterations + stylized looks.',
-    video: { maxDurationSec: 10, resolutions: ['480p', '720p', '1080p'], nativeAudio: false, motion: ['text', 'image-to-video'], cameraControls: ['pan', 'tracking'], maxReferenceImages: 1, costPerSecondUsd: [0.03, 0.12], promptFormula: VIDEO_FORMULA },
+    id: 'happy-horse-1.1', label: 'Happy Horse 1.1 (Alibaba)', provider: 'fal', envKey: 'FAL_API_KEY',
+    providerModelId: 'alibaba/happy-horse/v1.1',
+    modalities: ['video'], tier: 3, sourceRefreshedAt: VVID, docs: HAPPYHORSE_DOCS,
+    brief:
+      'Alibaba Happy Horse 1.1 — the 1.x line took #1 on Artificial Analysis WITHOUT audio and roughly tied #1 with it. A unified 15B transformer with joint audio-video, multilingual lip-sync and 1080p, plus a video-EDIT endpoint the rest of the roster lacks. The widest aspect range here (21:9 through 9:21). $0.14/s at 720p, $0.28/s at 1080p. Verified 2026-08-31 — the July seed had neither this model NOR its 1.0 predecessor, and we seeded 1.0 before finding 1.1 was live.',
+    video: {
+      maxDurationSec: 15, resolutions: ['720p', '1080p'], nativeAudio: true,
+      motion: ['text', 'image-to-video'],
+      cameraControls: ['pan', 'tilt', 'tracking'],
+      maxReferenceImages: 4,
+      costPerSecondUsd: [0.14, 0.28],
+      costPerSecondByResolution: { '720p': 0.14, '1080p': 0.28 }, // verified 2026-08-31
+      promptFormula: VIDEO_FORMULA,
+    },
   },
 ];
 
@@ -224,4 +327,40 @@ export function modalitySurfaces(): { modality: Modality | 'dm'; label: string; 
     { modality: 'audio', label: 'Audio', count: modelsForModality('audio').length },
     { modality: 'dm', label: 'Digital Media (Omni)', count: omniModels().length },
   ];
+}
+
+/**
+ * VIDEO models projected into the shape the doctrine/refresh machinery already consumes.
+ *
+ * The doctrine pass only needs `{ id, label, provider, docs, promptFormula }` — it reads documents,
+ * it does not care about reference pools or batch strategy. Rather than fork that machinery for a
+ * second modality (two copies of a self-maintaining loop is how they drift apart), video borrows it
+ * through this projection. Only models with PINNED docs are returned: nothing to read means nothing
+ * to distill, and an empty doctrine is worse than none.
+ */
+export function videoModelsForDoctrine(): ImageModel[] {
+  return MEDIA_MODELS.filter((m) => m.modalities.includes('video') && (m.docs ?? []).length > 0).map(
+    (m) =>
+      ({
+        id: m.id,
+        label: m.label,
+        provider: m.provider,
+        envKey: m.envKey,
+        tier: m.tier,
+        capabilities: [],
+        bestFor: [],
+        strengths: { photorealism: 0, prompt_adherence: 0, editing: 0, style_versatility: 0, text_rendering: 0, speed: 0, resolution: 0, consistency: 0, multimodal: 0 },
+        supportsEditing: false,
+        maxReferenceImages: m.video?.maxReferenceImages ?? 0,
+        aspectRatios: [],
+        costPerImageUsd: [0, 0],
+        maxBatchN: 1,
+        batchStrategy: 'parallel',
+        brief: m.brief,
+        sourceRefreshedAt: m.sourceRefreshedAt,
+        docs: m.docs,
+        promptFormula: m.video?.promptFormula,
+        providerModelId: m.providerModelId,
+      }) as unknown as ImageModel,
+  );
 }
