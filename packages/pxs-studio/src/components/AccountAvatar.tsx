@@ -6,6 +6,7 @@ import { useCurrentUser } from '../lib/use-current-user';
 import { useLoginModal } from './LoginModalProvider';
 import { clearCredentialsSession } from '../lib/credentials-auth';
 import { useSettings } from '../store/settings-store';
+import { BudgetMeter } from './BudgetMeter';
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * AccountAvatar — the identity anchor at the BOTTOM of the glass rail.
@@ -176,6 +177,12 @@ export default function AccountAvatar({ onOpenSettings }: { onOpenSettings?: () 
                 {email && <span className="pxs-acct-email">{email}</span>}
               </span>
             </div>
+
+            <div className="pxs-acct-sep" />
+
+            {/* Spend lives with identity: it is the user's money, so it belongs where their account
+                does — visible without hunting through settings. */}
+            <BudgetMeter />
 
             <div className="pxs-acct-sep" />
 

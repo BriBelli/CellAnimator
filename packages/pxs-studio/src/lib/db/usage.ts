@@ -16,8 +16,32 @@ import {
 } from './models';
 import type { Repository } from './repository';
 
-/** Default hard spend cap, USD, when a user record is created. */
+/**
+ * The cap a NEW account starts at, USD. Deliberately small — an unfunded account should not be able
+ * to spend meaningfully before its owner has chosen a number.
+ */
 export const DEFAULT_HARD_CAP_USD = 5;
+
+/**
+ * The ceiling on a self-service cap, USD. Not a judgement about how much someone should spend —
+ * it is a blast radius. A typo (100 → 10000) on a medium where one render can be $14 should not be
+ * silently accepted, and a raise past this asks for a deliberate step instead.
+ */
+export const MAX_SELF_SERVE_CAP_USD = 500;
+
+/** A user's budget as the product surfaces it. */
+export interface BudgetState {
+  /** The cap they set (or the default). */
+  cap_usd: number;
+  /** Everything charged so far — tokens AND generation spend. */
+  spent_usd: number;
+  /** What is left to spend. Never negative. */
+  remaining_usd: number;
+  /** Below the cap → work is allowed. */
+  allowed: boolean;
+  /** How much of the cap is used, 0–1 — what a meter renders. */
+  used_fraction: number;
+}
 
 /** Opus 4.8 cost for a given token split, USD. */
 export function costUsd(input_tokens: number, output_tokens: number): number {
@@ -94,6 +118,61 @@ export async function recordUsage(
   } as Partial<UserRecord>);
 
   return usage;
+}
+
+/**
+ * Set the user's own spend cap.
+ *
+ * This is THEIR money and therefore their decision — the cap exists so nobody is surprised by a
+ * bill, not to ration what they are allowed to make. So a raise is honoured immediately and without
+ * argument, and lowering below what is already spent is allowed too (it simply stops further work
+ * rather than being rejected as "invalid").
+ *
+ * Rejected only for values that cannot be meant: not a number, negative, or past the blast-radius
+ * ceiling. Returns the resulting budget so a caller never has to re-read to render it.
+ */
+export async function setSpendCap(
+  repo: Repository,
+  user_id: string,
+  cap_usd: number,
+): Promise<{ ok: true; budget: BudgetState } | { ok: false; error: string }> {
+  if (!Number.isFinite(cap_usd) || cap_usd < 0) {
+    return { ok: false, error: 'A spend cap must be a positive dollar amount.' };
+  }
+  if (cap_usd > MAX_SELF_SERVE_CAP_USD) {
+    return {
+      ok: false,
+      error: `The highest self-serve cap is $${MAX_SELF_SERVE_CAP_USD}. Contact support to raise it further.`,
+    };
+  }
+  const rounded = Number(cap_usd.toFixed(2));
+  const user = await ensureUserRecord(repo, user_id);
+  await repo.update('user', user.id, { hard_cap_usd: rounded } as Partial<UserRecord>);
+  const spent_usd = user.running_cost_usd;
+  return {
+    ok: true,
+    budget: {
+      cap_usd: rounded,
+      spent_usd,
+      remaining_usd: Math.max(0, rounded - spent_usd),
+      allowed: spent_usd < rounded,
+      used_fraction: rounded > 0 ? Math.min(1, spent_usd / rounded) : 1,
+    },
+  };
+}
+
+/** The budget as the UI shows it — one read, everything a meter and a warning need. */
+export async function getBudget(repo: Repository, user_id: string): Promise<BudgetState> {
+  const user = (await repo.get('user', user_id)) as UserRecord | null;
+  const cap_usd = user?.hard_cap_usd ?? DEFAULT_HARD_CAP_USD;
+  const spent_usd = user?.running_cost_usd ?? 0;
+  return {
+    cap_usd,
+    spent_usd: Number(spent_usd.toFixed(4)),
+    remaining_usd: Math.max(0, Number((cap_usd - spent_usd).toFixed(4))),
+    allowed: spent_usd < cap_usd,
+    used_fraction: cap_usd > 0 ? Math.min(1, spent_usd / cap_usd) : 1,
+  };
 }
 
 /** The spend gate: allowed while running spend is strictly below the hard cap. */

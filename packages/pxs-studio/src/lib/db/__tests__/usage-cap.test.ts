@@ -80,3 +80,53 @@ test('checkCap flips allowed=false once running spend reaches the cap', async ()
   assert.equal(capped.allowed, false, 'spent >= cap → blocked');
   assert.equal(capped.remaining_usd, 0);
 });
+
+// ── USER-CONTROLLED BUDGET ───────────────────────────────────────────────────────────────────────
+// The cap used to be a $5 constant nobody could change — a wall, not a rail, on a medium where one
+// 10s 1080p clip is $3.40. It is the user's money, so it is the user's number.
+import { setSpendCap, getBudget, MAX_SELF_SERVE_CAP_USD } from '../usage';
+
+test('a user can raise their own cap, and it takes effect immediately', async () => {
+  const repo = createMemoryRepository();
+  const before = await getBudget(repo, 'u1');
+  assert.equal(before.cap_usd, 5); // the starting default
+
+  const res = await setSpendCap(repo, 'u1', 100);
+  assert.equal(res.ok, true);
+  assert.equal((res as { ok: true; budget: { cap_usd: number } }).budget.cap_usd, 100);
+  assert.equal((await getBudget(repo, 'u1')).remaining_usd, 100);
+});
+
+test('spend is metered against the cap the USER set, not the default', async () => {
+  const repo = createMemoryRepository();
+  await setSpendCap(repo, 'u1', 50);
+  await recordUsage(repo, { user_id: 'u1', interaction_id: 'i1', input_tokens: 0, output_tokens: 0, gen_cost_usd: 12 });
+  const b = await getBudget(repo, 'u1');
+  assert.equal(b.spent_usd, 12);
+  assert.equal(b.remaining_usd, 38);
+  assert.equal(b.allowed, true);
+  assert.ok(Math.abs(b.used_fraction - 0.24) < 1e-6); // what a meter renders
+});
+
+test('lowering the cap below what is already spent STOPS work — it is not an error', async () => {
+  const repo = createMemoryRepository();
+  await setSpendCap(repo, 'u1', 50);
+  await recordUsage(repo, { user_id: 'u1', interaction_id: 'i1', input_tokens: 0, output_tokens: 0, gen_cost_usd: 20 });
+  const res = await setSpendCap(repo, 'u1', 10); // "stop me here"
+  assert.equal(res.ok, true);
+  const b = await getBudget(repo, 'u1');
+  assert.equal(b.allowed, false);
+  assert.equal(b.remaining_usd, 0); // never negative
+});
+
+test('only values that cannot be meant are refused', async () => {
+  const repo = createMemoryRepository();
+  assert.equal((await setSpendCap(repo, 'u1', -5)).ok, false);
+  assert.equal((await setSpendCap(repo, 'u1', Number.NaN)).ok, false);
+  const tooBig = await setSpendCap(repo, 'u1', MAX_SELF_SERVE_CAP_USD + 1);
+  assert.equal(tooBig.ok, false);
+  assert.match((tooBig as { ok: false; error: string }).error, /highest self-serve cap/i);
+  // Zero is legitimate: "spend nothing more".
+  assert.equal((await setSpendCap(repo, 'u1', 0)).ok, true);
+  assert.equal((await getBudget(repo, 'u1')).allowed, false);
+});

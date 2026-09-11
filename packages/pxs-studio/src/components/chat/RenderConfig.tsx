@@ -10,9 +10,13 @@
  * from a compact summary trigger (the Artlist "16:9 / 1 Images" pattern). Model list from /api/models/list.
  * ───────────────────────────────────────────────────────────────────────────── */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, SegmentedControl } from '../ui';
+import { checkRenderBudget } from '../../lib/engine/render-estimate';
 import { useChatTurnsStore } from '../../store/chat-turns-store';
+
+/** Money, rendered the way people read it. */
+const money = (n: number) => `$${n.toFixed(2)}`;
 
 interface ModelOpt {
   id: string;
@@ -62,12 +66,20 @@ const CSS = `
 .rc-model[data-on="true"] { color: var(--a2ui-text-primary); background: var(--a2ui-accent-subtle); }
 .rc-model[data-on="true"] .rc-check { color: var(--pxs-accent-text); }
 .rc-model:disabled { cursor: default; }
-/* capped = selected but beyond the count → dim, keep the check so you see it's still in your set */
-.rc-model[data-capped="true"] { opacity: 0.45; }
-.rc-model:disabled:not([data-capped="true"]) { opacity: 0.4; }
+.rc-model:disabled { opacity: 0.4; }
 .rc-check { width: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--a2ui-accent); flex-shrink: 0; }
 .rc-model-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-model-off { flex-shrink: 0; font-size: 10px; color: var(--a2ui-text-tertiary); }
+.rc-cost { display: flex; flex-direction: column; gap: 2px; padding: var(--a2ui-space-3) 0;
+  border-top: 1px solid var(--pxs-border-subtle, var(--a2ui-border)); }
+.rc-cost-figure { font-size: var(--a2ui-text-sm); color: var(--a2ui-text-primary); font-variant-numeric: tabular-nums; }
+.rc-cost-note { font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); }
+.rc-cost[data-verdict='tight'] .rc-cost-note { color: var(--a2ui-warning); }
+.rc-cost[data-verdict='over'] .rc-cost-figure { color: var(--a2ui-danger, #e5484d); }
+.rc-cost[data-verdict='over'] .rc-cost-note { color: var(--a2ui-danger, #e5484d); }
+.rc-derived { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; height: 28px;
+  padding: 0 10px; border-radius: var(--a2ui-radius-md); background: var(--a2ui-bg-tertiary);
+  color: var(--a2ui-text-secondary); font-size: var(--a2ui-text-sm); font-variant-numeric: tabular-nums; }
 .rc-note { font-size: var(--a2ui-text-xs); color: var(--a2ui-text-tertiary); line-height: 1.4; }
 `;
 
@@ -127,23 +139,47 @@ export function RenderConfig() {
   const byRank = (ids: string[]) => [...ids].sort((a, b) => rankIndex(a) - rankIndex(b));
   const labelOf = (id: string) => models.find((m) => m.id === id)?.label ?? id;
 
-  const count = Math.max(1, fanConfig.fanModels);
+  // LIVE COST — the number that turns "hit render and find out" into a decision. Recomputed as the
+  // knobs move, because the knobs ARE the price: models × count (× seconds × resolution for video).
+  const budget = useChatTurnsStore((st) => st.budget);
+  const isAuto = fanConfig.mode === 'auto';
+  // In MANUAL the count is DERIVED from the selection — picking a model IS asking for it. A separate
+  // cap meant a model could be checked and still silently not render ("capped"), which is a trap:
+  // you chose it, the UI showed a checkmark, and nothing came back. Only AUTO has a real count to set,
+  // because there the agent needs to know how wide to fan.
+  const count = isAuto ? Math.max(1, fanConfig.fanModels) : Math.max(1, fanConfig.models.length);
   const maxCount = Math.max(1, readyRanked.length || 5);
 
   // THE SELECTION — one concrete, ordered list, whatever the mode:
-  //  • AUTO   → a live PREVIEW of the top-`count` ready models (not frozen — untouched Auto still lets
-  //             the Model agent pick per-request at render; this just shows what it'll likely choose).
+  //  • AUTO   → NOT a selection at all. The Model agent picks per request from the cross-validated
+  //             fit for THAT brief; this list is only the pool it draws from, and `count` is how many
+  //             it may fan across. Showing these rows as CHECKED was a straight contradiction —
+  //             "Auto" that displays three locked-in choices reads as a manual selection, and the
+  //             rank-ordered preview isn't even what the agent would choose. Auto now shows no
+  //             checkmarks; picking one is an explicit act that moves you to Manual.
   //  • MANUAL → exactly what the user curated (persisted). Editing ANY model flips Auto → Manual and
   //             seeds the current preview so nothing is lost.
   const selected =
     fanConfig.mode === 'manual'
       ? byRank(fanConfig.models.filter((id) => models.some((m) => m.id === id)))
       : readyRanked.slice(0, count).map((m) => m.id);
-  const active = selected.slice(0, count); // the models that actually render; the rest are capped/disabled
+  // Manual: every selected model renders. Auto: the preview is the top-`count`.
+  const active = isAuto ? selected.slice(0, count) : selected;
 
   // Before the catalog loads, fall back to the raw count so the trigger never flashes "0 models".
   const shownCount = active.length || (models.length === 0 ? count : 0);
   const summary = `${fanConfig.mode === 'auto' ? 'Auto' : 'Manual'} · ${shownCount} model${shownCount === 1 ? '' : 's'} · ${fanConfig.perModel}/ea · ${fanConfig.aspect ?? 'auto'}`;
+
+  // Priced against what will ACTUALLY run: in Auto the agent picks, so the preview list is the best
+  // available prediction and is labelled as such rather than quoted as a certainty.
+  const cost = useMemo(
+    () =>
+      checkRenderBudget(
+        { medium: 'image', modelIds: active, perModel: fanConfig.perModel },
+        budget?.remaining_usd ?? Number.POSITIVE_INFINITY,
+      ),
+    [active, fanConfig.perModel, budget?.remaining_usd],
+  );
 
   // Toggling a model always lands in MANUAL with a concrete list; count follows the selection size so
   // selecting adds (+1) and deselecting removes (−1) — never below 1.
@@ -155,22 +191,8 @@ export function RenderConfig() {
     setFanConfig({ mode: 'manual', models: next, fanModels: Math.max(1, next.length) });
   };
 
-  // The COUNT dropdown/steppers: in Auto it just resizes the preview (stays autonomous). In Manual it
-  // caps the active window (extra selections DISABLE, not deleted) or AUTO-FILLS from the next-best.
-  const setCount = (c: number) => {
-    const next = Math.max(1, Math.min(maxCount, c));
-    if (fanConfig.mode === 'auto') {
-      setFanConfig({ fanModels: next });
-      return;
-    }
-    if (next > fanConfig.models.length) {
-      const fill = readyRanked.map((m) => m.id).filter((id) => !fanConfig.models.includes(id));
-      const grown = byRank([...fanConfig.models, ...fill.slice(0, next - fanConfig.models.length)]);
-      setFanConfig({ models: grown, fanModels: next });
-    } else {
-      setFanConfig({ fanModels: next }); // cap — selected list unchanged, overflow disables
-    }
-  };
+  /** AUTO only — how wide the agent should fan. In Manual the count follows the selection. */
+  const setCount = (c: number) => setFanConfig({ fanModels: Math.max(1, Math.min(maxCount, c)) });
 
   const toAuto = () => setFanConfig({ mode: 'auto', models: [] });
   const toManual = () => setFanConfig({ mode: 'manual', models: selected, fanModels: Math.max(1, active.length) });
@@ -200,41 +222,75 @@ export function RenderConfig() {
           </div>
 
           <div className="rc-row">
-            <span className="rc-lbl">How many</span>
-            <Stepper value={count} min={1} max={maxCount} onChange={setCount} />
+            <span className="rc-lbl">{isAuto ? 'How many models' : 'Models selected'}</span>
+            {isAuto ? (
+              <Stepper value={count} min={1} max={maxCount} onChange={setCount} />
+            ) : (
+              /* Same row, same height — no layout shift when switching modes. A read-only figure
+                 rather than a disabled stepper: a greyed control still asks "why is this here?",
+                 whereas a plain count reads as a fact about what you picked. */
+              <span className="rc-derived" title="Set by the models you select below">
+                {count}
+              </span>
+            )}
           </div>
 
-          {/* The MODEL LIST — shown in BOTH modes. Auto pre-selects (checked); editing any row flips to
-              Manual and persists. Selections beyond "How many" show CAPPED (checked but disabled) — they
-              come back when you raise the count. No-key models are disabled. */}
-          <div className="rc-models">
+          {/* The MODEL LIST — shown in BOTH modes, but they MEAN different things. In Auto these are
+              the candidate pool (no checkmarks — the agent decides per render); tapping one is how you
+              take over, which lands you in Manual with that model chosen. In Manual they're your
+              curated list; selections beyond "How many" show CAPPED (checked, disabled) and return
+              when you raise the count. No-key models are always disabled. */}
+          <div className="rc-models" data-auto={isAuto}>
             {models.length === 0 ? (
               <span className="rc-note">Loading models…</span>
             ) : (
               ranked.map((m) => {
-                const isSelected = selected.includes(m.id);
-                const isActive = active.includes(m.id);
-                const capped = isSelected && !isActive;
-                const disabled = !m.ready || capped;
+                // In Auto nothing is "selected" — there is no user choice to display yet.
+                const isSelected = !isAuto && selected.includes(m.id);
+                const isActive = !isAuto && active.includes(m.id);
+                const disabled = !m.ready;
                 return (
                   <button
                     key={m.id}
                     type="button"
                     className="rc-model"
                     data-on={isActive}
-                    data-capped={capped}
                     disabled={disabled}
                     onClick={() => toggleModel(m.id)}
-                    title={capped ? 'Beyond “How many” — raise the count to include it' : undefined}
+                    title={isAuto ? `Choose ${m.label} yourself (switches to Manual)` : undefined}
                   >
                     <span className="rc-check">{isSelected && <Icon name="check" size={12} />}</span>
                     <span className="rc-model-name">{m.label}</span>
-                    {!m.ready ? <span className="rc-model-off">no key</span> : capped ? <span className="rc-model-off">capped</span> : null}
+                    {!m.ready ? <span className="rc-model-off">no key</span> : null}
                   </button>
                 );
               })
             )}
           </div>
+          {isAuto && models.length > 0 && (
+            <div className="rc-note">
+              The model agent picks the best {count === 1 ? 'model' : `${count} models`} for each render.
+              Tap one to choose yourself.
+            </div>
+          )}
+
+          {/* THE PRICE, before the click. Video is ~50x an image per render, so a control surface
+              that can spend either must say what this one costs while the knobs are still reachable. */}
+          {active.length > 0 && (
+            <div className="rc-cost" data-verdict={cost.verdict}>
+              <span className="rc-cost-figure">{cost.estimate.summary}</span>
+              {budget && (
+                <span className="rc-cost-note">
+                  {cost.verdict === 'over'
+                    ? `${money(cost.shortfallUsd)} over your remaining ${money(budget.remaining_usd)}`
+                    : cost.verdict === 'tight'
+                      ? `most of your remaining ${money(budget.remaining_usd)}`
+                      : `${money(budget.remaining_usd)} left`}
+                </span>
+              )}
+              {isAuto && <span className="rc-cost-note">estimated — the agent picks the final models</span>}
+            </div>
+          )}
 
           <div className="rc-row">
             <span className="rc-lbl">Images each</span>
