@@ -1,9 +1,9 @@
 /**
- * xAI adapter — Grok image generation (grok-2-image).
+ * xAI adapter — Grok Imagine image generation (grok-imagine-image-2.0, shipped 2026-08-07).
  *
  * OpenAI-compatible. Text-to-image via POST /v1/images/generations; with references, POST
- * /v1/images/edits (multipart) — xAI's edits framework accepts source/reference images (up to ~3) to
- * character-match / compose. Reads XAI_API_KEY.
+ * /v1/images/edits (multipart) — xAI's Imagine API accepts up to 3 source/reference images to
+ * character-match / compose (1K/2K output). Reads XAI_API_KEY.
  */
 
 import {
@@ -13,10 +13,12 @@ import {
   type GenRequest,
   type ImageExecutor,
 } from '../executor';
-import { fetchAsBlob, reasonForStatus } from './_util';
+import { reasonForStatus, referenceLegend } from './_util';
 
-const API_MODEL: Record<string, string> = { 'grok-2-image': 'grok-2-image' };
+const API_MODEL: Record<string, string> = { 'grok-imagine-image-2.0': 'grok-imagine-image-2.0', 'grok-2-image': 'grok-2-image' };
 const COST_PER_IMAGE = 0.05;
+/** xAI's Imagine edit endpoint accepts up to 3 source images (docs, verified 2026-08-29). */
+const MAX_EDIT_IMAGES = 3;
 
 class XaiExecutor implements ImageExecutor {
   readonly provider = 'xai' as const;
@@ -31,27 +33,28 @@ class XaiExecutor implements ImageExecutor {
       yield { type: 'error', reason: 'no_key' };
       return;
     }
-    const model = API_MODEL[req.modelId] ?? 'grok-2-image';
+    const model = API_MODEL[req.modelId] ?? 'grok-imagine-image-2.0';
     const n = Math.max(1, req.n);
     const refs = req.references ?? [];
 
     let res: Response;
     try {
       if (refs.length > 0) {
-        // Reference / character-match → multipart images/edits with the source images.
-        const form = new FormData();
-        form.append('model', model);
-        form.append('prompt', req.prompt);
-        form.append('n', String(n));
-        let idx = 0;
-        for (const ref of refs) {
-          const blob = await fetchAsBlob(ref);
-          if (blob) form.append('image[]', blob, `ref-${idx++}.png`);
-        }
+        // Reference / character-match → images/edits. This endpoint takes JSON, NOT multipart: the
+        // adapter used to POST a FormData body and every reference render died on
+        // `415 Expected request with Content-Type: application/json` while text-only worked.
+        // Shape verified live 2026-08-29: `images` is an ARRAY of {url, type:'image_url'} objects
+        // (`image` takes exactly one; an array of bare strings is rejected). URLs may be https or
+        // data: URIs, so browser uploads pass straight through. Capped at the documented 3.
+        const images = refs.slice(0, MAX_EDIT_IMAGES).map((url) => ({ url, type: 'image_url' as const }));
         res = await fetch('https://api.x.ai/v1/images/edits', {
           method: 'POST',
-          headers: { Authorization: `Bearer ${key}` },
-          body: form,
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            prompt: req.prompt + referenceLegend(req.slotted, req.references),
+            images,
+          }),
         });
       } else {
         res = await fetch('https://api.x.ai/v1/images/generations', {

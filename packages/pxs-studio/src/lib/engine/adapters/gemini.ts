@@ -1,11 +1,11 @@
 /**
- * Gemini adapter — Nano Banana (Gemini 2.5 Flash Image).
+ * Gemini adapter — the Nano Banana family (Gemini 3 Pro Image / 3.1 Flash Image).
  *
  * Implements the ImageExecutor seam over Google's Generative Language REST API
  * (no new SDK dependency — raw fetch, server-side only). Reads GEMINI_API_KEY from
  * the environment; the registry never sees the key.
  *
- * Nano Banana produces one image per call, so N images = N parallel calls, and we
+ * The family produces one image per call, so N images = N parallel calls, and we
  * stream each tile the moment it lands (completion order) rather than waiting for
  * the whole batch. References (data: or http[s] URLs) are inlined for edit/compose.
  */
@@ -18,17 +18,25 @@ import {
   type GenRequest,
   type ImageExecutor,
 } from '../executor';
+import { referenceLegend } from './_util';
 
-/** registry modelId → the provider's actual API model string. */
+/** registry modelId → the provider's actual API model string (GA ids verified 2026-08-24).
+ *  'nano-banana' kept as an alias so persisted old picks still render (routes to the 3.1 successor). */
 const API_MODEL: Record<string, string> = {
-  'nano-banana': 'gemini-2.5-flash-image',
+  'gemini-3-pro-image': 'gemini-3-pro-image',
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
+  'nano-banana': 'gemini-3.1-flash-image',
 };
 
 const ENDPOINT = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-/** Flat per-image price for Nano Banana (mirrors the registry). */
-const COST_PER_IMAGE = 0.039;
+/** Per-image price at the default 1K-2K output (mirrors the registry cost bands). */
+const COST_FOR: Record<string, number> = {
+  'gemini-3-pro-image': 0.134,
+  'gemini-3.1-flash-image': 0.067,
+};
+const DEFAULT_COST = 0.067;
 
 interface InlinePart {
   inlineData: { mimeType: string; data: string };
@@ -71,9 +79,13 @@ class GeminiExecutor implements ImageExecutor {
 
   /** One generation call → one image (or an error reason). */
   private async one(req: GenRequest, key: string): Promise<{ image?: GenImage; error?: GenErrorReason }> {
-    const apiModel = API_MODEL[req.modelId] ?? 'gemini-2.5-flash-image';
+    const apiModel = API_MODEL[req.modelId] ?? 'gemini-3.1-flash-image';
 
-    const parts: Array<{ text: string } | InlinePart> = [{ text: req.prompt }];
+    // Gemini's object/character/style pools are SEMANTIC — the API takes one list of inline images
+    // and the model learns each one's job from the prompt. So the planner's roles become a legend.
+    const parts: Array<{ text: string } | InlinePart> = [
+      { text: req.prompt + referenceLegend(req.slotted, req.references) },
+    ];
     for (const ref of req.references ?? []) {
       const p = await referencePart(ref);
       if (p) parts.push(p);
@@ -114,7 +126,18 @@ class GeminiExecutor implements ImageExecutor {
     }
 
     const imgPart = cand?.content?.parts?.find((p) => p.inlineData?.data);
-    if (!imgPart?.inlineData?.data) return { error: 'unknown' };
+    if (!imgPart?.inlineData?.data) {
+      // A response with no image and no block reason is a real outcome — usually a transient
+      // no-candidate return. Say WHAT came back instead of a bare 'unknown': an unexplained failure
+      // sends you hunting for an adapter bug that is not there (it cost a diagnosis cycle already).
+      const why = cand?.finishReason
+        ? `finishReason=${cand.finishReason}`
+        : data?.candidates?.length
+          ? 'a candidate with no image part'
+          : 'no candidates returned';
+      console.warn(`[gemini] ${apiModel}: ${why} — retryable.`);
+      return { error: 'unknown' };
+    }
 
     const mime = imgPart.inlineData.mimeType || 'image/png';
     return { image: { url: `data:${mime};base64,${imgPart.inlineData.data}` } };
@@ -151,7 +174,7 @@ class GeminiExecutor implements ImageExecutor {
       yield { type: 'error', reason: firstError ?? 'unknown' };
       return;
     }
-    yield { type: 'done', images, costUsd: Number((COST_PER_IMAGE * images.length).toFixed(3)) };
+    yield { type: 'done', images, costUsd: Number(((COST_FOR[req.modelId] ?? DEFAULT_COST) * images.length).toFixed(3)) };
   }
 }
 

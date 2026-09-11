@@ -1,5 +1,5 @@
 /**
- * OpenAI adapter — GPT Image 1.
+ * OpenAI adapter — GPT Image 1.5 (OpenAI's current image flagship, Dec 2025).
  *
  * Implements the ImageExecutor seam over OpenAI's Images API (raw fetch, server-side; reads
  * OPENAI_API_KEY). Two paths: text→image via /v1/images/generations, and edit / multi-reference via
@@ -18,11 +18,11 @@ import {
   type GenRequest,
   type ImageExecutor,
 } from '../executor';
-import { fetchAsBlob, reasonForStatus } from './_util';
+import { fetchAsBlob, reasonForStatus, referenceLegend } from './_util';
 
-const API_MODEL: Record<string, string> = { 'gpt-image-1': 'gpt-image-1' };
+const API_MODEL: Record<string, string> = { 'gpt-image-1.5': 'gpt-image-1.5', 'gpt-image-1': 'gpt-image-1' };
 
-/** Map our aspect ratios onto gpt-image-1's supported sizes; 'auto' when unspecified/unknown. */
+/** Map our aspect ratios onto the gpt-image family's supported sizes; 'auto' when unspecified/unknown. */
 const SIZE_FOR: Record<string, string> = {
   '1:1': '1024x1024',
   '16:9': '1536x1024',
@@ -49,7 +49,7 @@ class OpenAIExecutor implements ImageExecutor {
       return;
     }
 
-    const model = API_MODEL[req.modelId] ?? 'gpt-image-1';
+    const model = API_MODEL[req.modelId] ?? 'gpt-image-1.5';
     const n = Math.max(1, req.n);
     const size = sizeFor(req.aspectRatio);
 
@@ -59,13 +59,17 @@ class OpenAIExecutor implements ImageExecutor {
         // Edit / multi-reference → multipart /images/edits.
         const form = new FormData();
         form.append('model', model);
-        form.append('prompt', req.prompt);
+        form.append('prompt', req.prompt + referenceLegend(req.slotted, req.references));
         form.append('n', String(n));
         if (size !== 'auto') form.append('size', size);
+        // The field is `image`, REPEATED — not `image[]`. The bracket form is a PHP/Rails
+        // convention OpenAI does not parse, so every reference render came back
+        // "Missing required parameter: 'image'" while text-only worked fine.
+        // Verified 2026-08-29 against the live API.
         let idx = 0;
         for (const ref of req.references) {
           const blob = await fetchAsBlob(ref);
-          if (blob) form.append('image[]', blob, `ref-${idx++}.png`);
+          if (blob) form.append('image', blob, `ref-${idx++}.png`);
         }
         res = await fetch('https://api.openai.com/v1/images/edits', {
           method: 'POST',

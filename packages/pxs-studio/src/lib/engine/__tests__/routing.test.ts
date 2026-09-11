@@ -35,41 +35,43 @@ test('gate1: no needs + all keys → every non-preview model survives', () => {
 test('gate1: a required capability drops models that lack it', () => {
   const { survivors, dropped } = gate1Filter(req({ needs: ['vector'] }), allKeys);
   // Only recraft-v3 advertises 'vector' in the starter catalog.
-  assert.deepEqual(survivors.map((m) => m.id), ['recraft-v3']);
+  assert.deepEqual(survivors.map((m) => m.id), ['recraft-v4.1']);
   assert.ok(dropped.every((d) => d.reason === 'missing_capability' || d.reason === 'preview'));
 });
 
-test('gate1: editing drops models without an edit path', () => {
+test('gate1: editing keeps only models with an edit path', () => {
   const { survivors } = gate1Filter(req({ editing: true }), allKeys);
+  // Every current non-preview model has an edit path (FLUX.2 included) — the invariant that matters
+  // is that nothing WITHOUT one survives.
+  assert.ok(survivors.length > 0);
   assert.ok(survivors.every((m) => m.supportsEditing));
-  // flux models have no edit path → excluded.
-  assert.ok(!survivors.find((m) => m.id.startsWith('flux')));
 });
 
-test('gate1: unsupported aspect ratio is dropped', () => {
+test('gate1: aspect ratio is a hint, NEVER a drop', () => {
+  // Deliberate design (see routing.ts): hand-typed aspect lists are data hints — models snap/clamp
+  // downstream. Benching on them is the collapse-the-fan bug. 21:9 must not bench anyone.
   const { survivors, dropped } = gate1Filter(req({ aspectRatio: '21:9' }), allKeys);
-  // Only flux-1.1-pro lists 21:9.
-  assert.deepEqual(survivors.map((m) => m.id), ['flux-1.1-pro']);
-  assert.ok(dropped.some((d) => d.reason === 'aspect_ratio'));
+  assert.equal(survivors.length, IMAGE_MODELS.filter((m) => !m.preview).length);
+  assert.ok(dropped.every((d) => d.reason === 'preview'));
 });
 
 test('gate1: missing key drops the model with reason no_key', () => {
   const { survivors, dropped } = gate1Filter(req(), onlyOpenAI);
-  assert.deepEqual(survivors.map((m) => m.id), ['gpt-image-1']);
+  assert.deepEqual(survivors.map((m) => m.id), ['gpt-image-1.5']);
   assert.ok(dropped.some((d) => d.reason === 'no_key'));
 });
 
 test('gate1: budget drops models whose min spend exceeds it', () => {
-  // count 5, budget $0.10 → drops models with low-cost*5 > 0.10 (e.g. gpt-image-1 @ $0.02*5=$0.10 is exactly ok; ideogram @ $0.06*5=$0.30 dropped).
+  // count 5, budget $0.10 → drops models with low-cost*5 > 0.10 (e.g. gpt-image-1.5 @ $0.02*5=$0.10 is exactly ok; ideogram @ $0.06*5=$0.30 dropped).
   const { survivors, dropped } = gate1Filter(req({ count: 5, budgetUsd: 0.1 }), allKeys);
-  assert.ok(survivors.find((m) => m.id === 'flux-dev')); // cheap survives
+  assert.ok(survivors.find((m) => m.id === 'flux-2-dev')); // cheap survives
   assert.ok(dropped.some((d) => d.reason === 'over_budget'));
   assert.ok(!survivors.find((m) => m.id === 'ideogram-v3'));
 });
 
 test('estimateCost: sums the (low, high) band across the fan-out', () => {
-  const flux = getModel('flux-1.1-pro')!;
-  const [lo, hi] = estimateCost([{ modelId: 'flux-1.1-pro', n: 4, rationale: '' }]);
+  const flux = getModel('flux-2-pro')!;
+  const [lo, hi] = estimateCost([{ modelId: 'flux-2-pro', n: 4, rationale: '' }]);
   assert.equal(lo, Number((flux.costPerImageUsd[0] * 4).toFixed(3)));
   assert.equal(hi, Number((flux.costPerImageUsd[1] * 4).toFixed(3)));
 });
@@ -88,17 +90,17 @@ test('deterministicRoute: no survivors → null', () => {
 
 test('parseFanout: valid JSON, sums preserved', () => {
   const survivors = IMAGE_MODELS;
-  const text = '{"fanout":[{"modelId":"flux-1.1-pro","n":2,"rationale":"a"},{"modelId":"gpt-image-1","n":2,"rationale":"b"}]}';
+  const text = '{"fanout":[{"modelId":"flux-2-pro","n":2,"rationale":"a"},{"modelId":"gpt-image-1.5","n":2,"rationale":"b"}]}';
   const fanout = parseFanout(text, survivors, 4);
   assert.equal(fanout.reduce((s, r) => s + r.n, 0), 4);
-  assert.deepEqual(fanout.map((r) => r.modelId).sort(), ['flux-1.1-pro', 'gpt-image-1']);
+  assert.deepEqual(fanout.map((r) => r.modelId).sort(), ['flux-2-pro', 'gpt-image-1.5']);
 });
 
 test('parseFanout: drops unknown ids and rebalances to count', () => {
   const survivors = IMAGE_MODELS;
-  const text = '{"fanout":[{"modelId":"not-a-real-model","n":3},{"modelId":"flux-dev","n":1}]}';
+  const text = '{"fanout":[{"modelId":"not-a-real-model","n":3},{"modelId":"flux-2-dev","n":1}]}';
   const fanout = parseFanout(text, survivors, 4);
-  assert.deepEqual(fanout.map((r) => r.modelId), ['flux-dev']);
+  assert.deepEqual(fanout.map((r) => r.modelId), ['flux-2-dev']);
   assert.equal(fanout[0].n, 4); // padded up to the requested count
 });
 
@@ -108,7 +110,7 @@ test('parseFanout: junk / non-JSON → empty (caller falls back)', () => {
 });
 
 test('parseFanout: overflow is trimmed down to count', () => {
-  const text = '{"fanout":[{"modelId":"flux-dev","n":5},{"modelId":"gpt-image-1","n":5}]}';
+  const text = '{"fanout":[{"modelId":"flux-2-dev","n":5},{"modelId":"gpt-image-1.5","n":5}]}';
   const fanout = parseFanout(text, IMAGE_MODELS, 4);
   assert.equal(fanout.reduce((s, r) => s + r.n, 0), 4);
 });

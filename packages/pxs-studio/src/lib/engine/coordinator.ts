@@ -11,6 +11,8 @@
 
 import './adapters';
 import { getModel } from './model-registry';
+import { planReferences, referenceCapacity } from './reference-planning';
+import type { SlotRole } from './model-registry';
 import { getExecutor } from './executor';
 import { selectModels } from '../agents/model-agent';
 import { type RoutingRequest, type RoutingDecision } from './routing';
@@ -140,23 +142,28 @@ export async function* coordinateImage(
       return;
     }
     push({ type: 'model_start', modelId: model.id, modelLabel: model.label, n: routed.n });
-    // CLAMP references to what THIS model documents it takes (graceful specialist: use its max, never
-    // bench). If we trimmed any, say so — an honest "used N of your M" instead of a silent drop.
-    const cap = model.referenceLimits
-      ? model.referenceLimits.object + model.referenceLimits.character + model.referenceLimits.style
-      : model.maxReferenceImages;
+    // PLAN the references onto THIS model's real input channels (graceful specialist: fill its
+    // actual slots up to their documented caps, fall back to a compatible channel rather than bench,
+    // and surface every compromise + usage fact BEFORE spending). See reference-planning.ts.
     const allRefs = fittedRefs ?? [];
-    const modelRefs = allRefs.slice(0, Math.max(0, cap));
-    if (allRefs.length > modelRefs.length) {
-      push({ type: 'notice', message: `${model.label} used ${modelRefs.length} of your ${allRefs.length} references — its documented max.` });
-    }
+    // Roles come from the user's tagging on each thumbnail (index-aligned). The planner maps them
+    // onto THIS model's real channels — falling back gracefully when it has no such channel.
+    const plan = planReferences(
+      model,
+      allRefs.map((url, i) => ({ url, role: req.referenceRoles?.[i] as SlotRole | undefined })),
+    );
+    const modelRefs = plan.planned.map((p) => p.url);
+    // Carry the SLOT ASSIGNMENT to the adapter, not just the urls. This is the whole point of the
+    // typed-slot research: which channel each image goes into is what makes a reference do its job.
+    const slotted = plan.planned.map((p) => ({ url: p.url, param: p.param, role: p.slotRole }));
+    for (const notice of plan.notices) push({ type: 'notice', message: notice });
     // Per-model lifecycle record: wall time + delivered count → a terminal model_done / model_error,
     // so the UI can show each model's true state (still cooking vs settled vs failed) — never inferred.
     const t0 = Date.now();
     let delivered = 0;
     let failed = false;
     try {
-      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, references: modelRefs.length > 0 ? modelRefs : undefined })) {
+      for await (const ev of executor.generate({ modelId: model.id, prompt: req.intent, n: routed.n, aspectRatio: req.aspectRatio, needs: req.needs, references: modelRefs.length > 0 ? modelRefs : undefined, slotted: slotted.length > 0 ? slotted : undefined })) {
         if (ev.type === 'tile') {
           const tile: GalleryTile = { modelId: model.id, modelLabel: model.label, image: ev.image };
           tiles.push(tile);

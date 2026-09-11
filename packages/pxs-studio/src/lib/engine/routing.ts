@@ -22,6 +22,7 @@ import {
   type Capability,
   type ImageModel,
 } from './model-registry';
+import { referenceCapacity } from './reference-planning';
 import { classifyRequest, crossValidateFit, pickRoster } from './selection';
 import { AGENT_MODELS } from '../agents/model-config';
 
@@ -46,6 +47,9 @@ export interface RoutingRequest {
   models?: string[];
   /** Input images (https or data URLs) to edit / compose from — forwarded to the adapter. */
   references?: string[];
+  /** Index-aligned with `references` — the ROLE each image plays ('character' | 'style' | 'object' |
+   *  'general'). Drives which of the model's real input channels each one is sent to. */
+  referenceRoles?: string[];
   /** True when the request edits/composes input images. */
   editing?: boolean;
   /** Optional hard budget for the whole request (USD). */
@@ -97,8 +101,10 @@ export function gate1Filter(
   const dropped: DroppedModel[] = [];
 
   for (const m of catalog) {
-    // Preview models are registry KNOWLEDGE only — never routed to (not yet callable).
-    if (m.preview) {
+    // Preview models are registry KNOWLEDGE only — never routed to (not yet callable). needsResearch
+    // models are discovered-but-unvetted — same rule: the registry PROMISES Gate 1 never spends on
+    // either, so both drop here (reported under the one knowledge-only reason).
+    if (m.preview || m.needsResearch) {
       dropped.push({ modelId: m.id, reason: 'preview' });
       continue;
     }
@@ -114,9 +120,7 @@ export function gate1Filter(
     // surfaced as skipped (with the reason), never silent. A wrong count now only trims inputs, never
     // drops a model — the Model agent's research keeps the counts honest.
     if (req.references && req.references.length > 0) {
-      const capacity = m.referenceLimits
-        ? m.referenceLimits.object + m.referenceLimits.character + m.referenceLimits.style
-        : m.maxReferenceImages;
+      const capacity = referenceCapacity(m);
       if (capacity < 1 && !m.supportsEditing) {
         dropped.push({ modelId: m.id, reason: 'ref_capacity' });
         continue;

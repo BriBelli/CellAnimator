@@ -18,7 +18,7 @@ import {
   type GenRequest,
   type ImageExecutor,
 } from '../executor';
-import { reasonForStatus } from './_util';
+import { reasonForStatus, referenceLegend } from './_util';
 
 /** registry modelId → Replicate "owner/model". */
 const MODEL_PATH: Record<string, string> = {
@@ -28,6 +28,30 @@ const MODEL_PATH: Record<string, string> = {
 
 /** Rough per-image estimate (registry carries the real band). */
 const COST_PER_IMAGE = 0.04;
+
+/** FLUX.2 accepts at most 8 reference images (live schema, 2026-08-27). */
+const MAX_REFERENCE_IMAGES = 8;
+
+/** The aspect ratios FLUX.2 actually accepts (live schema). Note: NO 21:9. */
+const SUPPORTED_ASPECTS = new Set(['1:1', '16:9', '3:2', '2:3', '4:5', '5:4', '9:16', '3:4', '4:3']);
+
+/** Nearest supported frame for a ratio FLUX doesn't list, so an exotic request degrades instead of
+ *  failing outright (graceful specialist: render the closest thing, never nothing). */
+const ASPECT_FALLBACK: Record<string, string> = {
+  '21:9': '16:9',
+  '9:21': '9:16',
+  '2:1': '16:9',
+  '1:2': '9:16',
+};
+
+function aspectFor(requested: string | undefined, hasReferences: boolean): string | undefined {
+  if (!requested) {
+    // With references and no explicit frame, match the first reference rather than guessing.
+    return hasReferences ? 'match_input_image' : undefined;
+  }
+  if (SUPPORTED_ASPECTS.has(requested)) return requested;
+  return ASPECT_FALLBACK[requested] ?? '16:9';
+}
 
 interface Prediction {
   status?: 'starting' | 'processing' | 'succeeded' | 'failed' | 'canceled';
@@ -55,15 +79,22 @@ class ReplicateExecutor implements ImageExecutor {
     const path = MODEL_PATH[req.modelId];
     if (!path) return { error: 'bad_request' };
 
-    const input: Record<string, unknown> = { prompt: req.prompt };
-    if (req.aspectRatio) input.aspect_ratio = req.aspectRatio;
-    // FLUX.2 multi-reference: input_image (first) + input_image_2..input_image_9 (up to 8 refs total).
-    if (req.references && req.references.length > 0) {
-      input.input_image = req.references[0];
-      for (let i = 1; i < Math.min(req.references.length, 9); i++) {
-        input[`input_image_${i + 1}`] = req.references[i];
-      }
-    }
+    // FLUX.2 refs are INDEX-ADDRESSABLE ("the coat from image 3"), so naming each image's role in the
+    // prompt is not decoration — it is the addressing mechanism the model documents.
+    const input: Record<string, unknown> = { prompt: req.prompt + referenceLegend(req.slotted, req.references) };
+
+    // FLUX.2 multi-reference is ONE array parameter: `input_images` (max 8), NOT input_image +
+    // input_image_2… Verified 2026-08-27 against the live model schema. The old per-index form sent
+    // properties the schema doesn't define, so Replicate rejected the whole request and every
+    // reference-bearing FLUX render failed with "delivered nothing" — while text-only renders worked,
+    // which is exactly why it looked like a flaky connection.
+    const refs = (req.references ?? []).slice(0, MAX_REFERENCE_IMAGES);
+    if (refs.length > 0) input.input_images = refs;
+
+    // Aspect must be one of the model's supported values — an unsupported string is a hard rejection,
+    // not a graceful fallback. Unknown ratios fall back to the nearest supported frame.
+    const aspect = aspectFor(req.aspectRatio, refs.length > 0);
+    if (aspect) input.aspect_ratio = aspect;
 
     let res: Response;
     try {
@@ -82,7 +113,9 @@ class ReplicateExecutor implements ImageExecutor {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      if (detail) console.warn(`[replicate] ${res.status}: ${detail.slice(0, 300)}`);
+      // Log the model + the provider's own message: a 422 here means our INPUT SHAPE is wrong, and a
+      // bare status code sent us hunting for a network problem that never existed.
+      console.warn(`[replicate] ${path} ${res.status}: ${detail.slice(0, 400)}`);
       return { error: reasonForStatus(res.status) };
     }
 
@@ -98,6 +131,7 @@ class ReplicateExecutor implements ImageExecutor {
     }
 
     if (!pred || pred.status === 'failed' || pred.status === 'canceled') {
+      if (pred?.error) console.warn(`[replicate] ${path} prediction ${pred.status}: ${String(pred.error).slice(0, 300)}`);
       return { error: pred?.error ? 'bad_request' : 'unknown' };
     }
     const url = firstUrl(pred.output);

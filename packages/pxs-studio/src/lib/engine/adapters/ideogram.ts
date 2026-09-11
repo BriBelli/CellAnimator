@@ -16,13 +16,28 @@ import {
 } from '../executor';
 import { fetchAsBlob, reasonForStatus } from './_util';
 
-/** Ideogram aspect strings (their enum uses ASPECT_W_H). */
+/**
+ * Ideogram v3 aspect strings. The v3 API takes "WxH" — the ASPECT_W_H enum here was the v1/v2 form
+ * and v3 rejects it outright (400: "'ASPECT_1_1' is not one of [...]"), so EVERY Ideogram render
+ * failed the moment an aspect ratio was set. Verified against the live API 2026-08-27; the full
+ * accepted set is below, so we no longer silently drop ratios Ideogram actually supports.
+ */
 const ASPECT: Record<string, string> = {
-  '1:1': 'ASPECT_1_1',
-  '16:9': 'ASPECT_16_9',
-  '9:16': 'ASPECT_9_16',
-  '3:2': 'ASPECT_3_2',
-  '2:3': 'ASPECT_2_3',
+  '1:1': '1x1',
+  '16:9': '16x9',
+  '9:16': '9x16',
+  '3:2': '3x2',
+  '2:3': '2x3',
+  '4:3': '4x3',
+  '3:4': '3x4',
+  '4:5': '4x5',
+  '5:4': '5x4',
+  '16:10': '16x10',
+  '10:16': '10x16',
+  '2:1': '2x1',
+  '1:2': '1x2',
+  '3:1': '3x1',
+  '1:3': '1x3',
 };
 const COST_PER_IMAGE = 0.06;
 
@@ -45,10 +60,18 @@ class IdeogramExecutor implements ImageExecutor {
     form.append('num_images', String(Math.max(1, req.n)));
     form.append('rendering_speed', 'DEFAULT');
     if (req.aspectRatio && ASPECT[req.aspectRatio]) form.append('aspect_ratio', ASPECT[req.aspectRatio]);
-    // References → style reference images (Ideogram conditions on them).
-    for (const ref of req.references ?? []) {
-      const blob = await fetchAsBlob(ref);
-      if (blob) form.append('style_reference_images', blob, 'ref.png');
+    // References → their REAL channels. Ideogram keeps style and character references separate and
+    // uses them differently: a face in `style_reference_images` conditions the palette, not the
+    // person. The planner already decided which is which (typed slots, researched from the docs) —
+    // honour it. Falls back to style refs only when nothing was routed, preserving old behaviour.
+    const slotted = req.slotted?.length
+      ? req.slotted
+      : (req.references ?? []).map((url) => ({ url, param: 'style_reference_images', role: 'style' as const }));
+    for (const ref of slotted) {
+      const blob = await fetchAsBlob(ref.url);
+      if (!blob) continue;
+      const param = ref.param === 'character_reference_images' ? 'character_reference_images' : 'style_reference_images';
+      form.append(param, blob, `${param}.png`);
     }
 
     let res: Response;
